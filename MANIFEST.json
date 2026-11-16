@@ -1,0 +1,43 @@
+{
+  "SourceCommit": "1fe35f888f2a43696a938f6b66cea484bf35bcff",
+  "BaseCommit": "e7711b104b339a99385f2bb12b472d46140a7bc7",
+  "Status": "Build kit only; Windows CI and live handoff have not run.",
+  "Files": {
+    ".github/workflows/windows-test.yml": {
+      "Bytes": 6101,
+      "SHA256": "bf5126d9a5e4635e9a2d3f098a9f543b2f62c46201d8aa1a121573d5bdc43946"
+    },
+    "README.md": {
+      "Bytes": 2502,
+      "SHA256": "d557e524bee4ad047e38bdb2827eff3dd34e3b7264bfcc025dacc5169a0d1c59"
+    },
+    "LICENSE.txt": {
+      "Bytes": 17987,
+      "SHA256": "ab15fd526bd8dd18a9e77ebc139656bf4d33e97fc7238cd11bf60e2b9b8666c6"
+    },
+    "parallel-queue/dolphin.patch": {
+      "Bytes": 151394,
+      "SHA256": "748f4498bf839c48d40c52fe8e8e9768faa1e5c4a54eeb0160ae6ca7e6c70fcf"
+    },
+    "parallel-queue/TESTING.txt": {
+      "Bytes": 3348,
+      "SHA256": "0c7dfffc25a698c98dc955ed2211d3b759ec4bf3eb946c8c7e21d824d84bc8e9"
+    },
+    "parallel-queue/preflight-parallel-queue.delta.json": {
+      "Bytes": 7376,
+      "SHA256": "a258c5da5d0ca05d38183a0bc4afc0d4f4f24cae85db887c57d437a605f6441c"
+    },
+    ".gitattributes": {
+      "Bytes": 27,
+      "SHA256": "13b51626ad6f2c28e99ccfe8072697fd63e1fb77ce6b5e074dac1dd7374f4d77"
+    },
+    "parallel-queue/Patch-Preflight.cmd": {
+      "Bytes": 120,
+      "SHA256": "8231503d34b7cc5c3b22b980792eb41eef1678b0a14854a99c41ee3c7bc99e11"
+    },
+    "parallel-queue/Patch-Preflight.ps1": {
+      "Bytes": 9863,
+      "SHA256": "f4152da3c736727f891efb8ed0d4ad99baaa17beb3a471ee8b7c0e9e943ab978"
+    }
+  }
+}

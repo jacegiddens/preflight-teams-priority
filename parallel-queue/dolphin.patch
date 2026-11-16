@@ -1,0 +1,3186 @@
+diff --git a/Development/SingleInstance/.gitignore b/Development/SingleInstance/.gitignore
+new file mode 100644
+index 0000000..7a60b85
+--- /dev/null
++++ b/Development/SingleInstance/.gitignore
+@@ -0,0 +1,2 @@
++__pycache__/
++*.pyc
+diff --git a/Development/SingleInstance/ActiveClientTest.cpp b/Development/SingleInstance/ActiveClientTest.cpp
+new file mode 100644
+index 0000000..72e9dd5
+--- /dev/null
++++ b/Development/SingleInstance/ActiveClientTest.cpp
+@@ -0,0 +1,61 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++
++#include "Core/Slippi/SlippiActiveClient.h"
++
++#include <iostream>
++#include <stdexcept>
++#include <thread>
++
++namespace
++{
++int checks = 0;
++void Check(bool value, const char* reason)
++{
++  if (!value)
++    throw std::runtime_error(reason);
++  ++checks;
++}
++struct FakeClient {};
++}
++
++int main()
++{
++  SlippiActiveClient<FakeClient> active;
++  FakeClient singles, teams, unrelated;
++  Check(!active.IsOnline(), "starts offline");
++  active.Activate(&singles);
++  Check(active.IsActive(&singles), "singles activates normally");
++  // Creating a standby client does not call Activate.
++  Check(!active.IsActive(&teams) && active.IsOnline(), "background Teams does not steal gameplay");
++  active.Release(&teams);
++  Check(active.IsActive(&singles), "failed background Teams cleanup preserves singles");
++  active.Activate(&teams);
++  Check(active.IsActive(&teams), "explicit Teams handoff publishes Teams");
++  active.Release(&singles);
++  Check(active.IsActive(&teams), "old singles disconnect cannot clear Teams");
++  active.Release(&singles);
++  Check(active.IsActive(&teams), "old singles destructor is harmless after disconnect");
++  active.Release(&unrelated);
++  Check(active.IsActive(&teams), "unrelated cleanup cannot clear active role");
++  active.Release(&teams);
++  Check(!active.IsOnline(), "active disconnect returns offline");
++  active.Release(&teams);
++  Check(!active.IsOnline(), "repeated active cleanup is idempotent");
++
++  // Exercise competing cleanup/handoff threads. Cleanup never owns the new slot,
++  // so every ordering must leave Teams active. No fake client is dereferenced.
++  for (int i = 0; i < 2000; ++i)
++  {
++    active.Activate(&singles);
++    std::thread old_cleanup([&] { active.Release(&singles); });
++    std::thread handoff([&] { active.Activate(&teams); });
++    old_cleanup.join();
++    handoff.join();
++    if (!active.IsActive(&teams))
++      throw std::runtime_error("competing old cleanup erased new gameplay client");
++  }
++  Check(true, "2000 competing cleanup/handoff schedules preserve Teams");
++  std::cout << checks << " active-client lifecycle checks passed. No network or emulator was run.\n";
++}
+diff --git a/Development/SingleInstance/BuildKit/.github/workflows/windows-test.yml b/Development/SingleInstance/BuildKit/.github/workflows/windows-test.yml
+new file mode 100644
+index 0000000..2db7c29
+--- /dev/null
++++ b/Development/SingleInstance/BuildKit/.github/workflows/windows-test.yml
+@@ -0,0 +1,117 @@
++name: Build Windows Teams Priority test
++on:
++  workflow_dispatch:
++  push:
++    paths:
++      - '.github/workflows/windows-test.yml'
++      - 'parallel-queue/**'
++permissions:
++  contents: read
++jobs:
++  windows:
++    runs-on: windows-2022
++    timeout-minutes: 90
++    env:
++      DXSDK_DIR: 'C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)\'
++      DOLPHIN_DISTRIBUTOR: 'Experimental Teams Priority'
++    steps:
++      - name: Checkout this build project
++        uses: actions/checkout@v4
++      - name: Preserve patch line endings
++        run: git config --global core.autocrlf false
++      - name: Checkout original Slippi 3.6.4 source
++        uses: actions/checkout@v4
++        with:
++          repository: project-slippi/Ishiiruka
++          ref: v3.6.4
++          path: dolphin
++          fetch-depth: 0
++          submodules: recursive
++      - name: Apply reviewed source changes
++        shell: pwsh
++        run: |
++          git -C dolphin apply --check ../parallel-queue/dolphin.patch
++          if ($LASTEXITCODE) { throw 'Source patch did not match upstream.' }
++          git -C dolphin apply ../parallel-queue/dolphin.patch
++          if ($LASTEXITCODE) { throw 'Could not apply source patch.' }
++      - name: Install the pinned Rust compiler
++        uses: actions-rust-lang/setup-rust-toolchain@v1
++        with:
++          toolchain: '1.88.0'
++          rustflags: ''
++      - name: Set up Visual Studio build tools
++        uses: microsoft/setup-msbuild@v2
++      - name: Set up the C++ compiler for isolated checks
++        uses: ilammy/msvc-dev-cmd@v1
++        with:
++          arch: x64
++      - name: Test Windows session ownership and protocol code
++        shell: pwsh
++        working-directory: dolphin
++        run: |
++          New-Item -ItemType Directory -Force checks | Out-Null
++          foreach ($name in @('ActiveClient','QueueControl','SessionBarrier','RustAccess')) {
++            & cl.exe /nologo /std:c++14 /EHsc /W4 /WX /I Source/Core "Development/SingleInstance/${name}Test.cpp" "/Fe:checks/$name.exe" "/Fo:checks/$name.obj"
++            if ($LASTEXITCODE) { throw "$name did not compile." }
++            & "./checks/$name.exe"
++            if ($LASTEXITCODE) { throw "$name failed." }
++          }
++          & cl.exe /nologo /TC /W4 /WX /c Development/SingleInstance/Game/queue_client.c /Fo:checks/queue_client.obj
++          if ($LASTEXITCODE) { throw 'C protocol client did not compile.' }
++          & cl.exe /nologo /std:c++14 /EHsc /W4 /WX /I Source/Core Development/SingleInstance/GameClientTest.cpp checks/queue_client.obj /Fe:checks/GameClient.exe /Fo:checks/GameClient.obj
++          if ($LASTEXITCODE) { throw 'Protocol integration test did not compile.' }
++          & ./checks/GameClient.exe
++          if ($LASTEXITCODE) { throw 'Protocol integration test failed.' }
++      - name: Install legacy DirectX headers required by upstream
++        shell: pwsh
++        run: |
++          # The upstream build removes these old redists before DXSDK setup.
++          foreach ($product in @('{F0C3E5D1-1ADE-321E-8167-68EF0DE699A5}', '{1D8E6291-B0D5-35EC-8441-6616F567A0F7}')) {
++            Start-Process msiexec.exe -ArgumentList @('/passive','/norestart',"/X$product") -Wait
++          }
++          choco install directx-sdk -y --no-progress
++          if ($LASTEXITCODE -notin @(0,1641,3010)) { throw 'DirectX SDK installation failed.' }
++      - name: Build the Windows Dolphin executable
++        shell: pwsh
++        run: |
++          $sdk = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Include' -Directory |
++            Where-Object { $_.Name -match '^10\.0\.[0-9]+\.[0-9]+$' } |
++            Sort-Object { [version]$_.Name } | Select-Object -Last 1
++          if (-not $sdk) { throw 'No installed Windows SDK found.' }
++          & msbuild.exe dolphin/Source/Dolphin.sln /m /p:Configuration=Release /p:Platform=x64 "/p:WindowsTargetPlatformVersion=$($sdk.Name)" /p:PreferredToolArchitecture=x64 /bl:windows-build.binlog
++          if ($LASTEXITCODE) { throw 'Dolphin build failed. See build log.' }
++      - name: Package the experimental build and ISO patcher
++        shell: pwsh
++        run: |
++          $output = 'dolphin/Binary/x64'
++          foreach ($file in @('Slippi Dolphin.exe','slippi_rust_extensions.dll')) {
++            if (-not (Test-Path "$output/$file")) { throw "Missing runtime file: $file" }
++          }
++          New-Item -ItemType Directory -Force "$output/Sys" | Out-Null
++          Copy-Item dolphin/Data/Sys/* "$output/Sys/" -Recurse -Force
++          Copy-Item parallel-queue/Patch-Preflight.cmd,parallel-queue/Patch-Preflight.ps1,parallel-queue/preflight-parallel-queue.delta.json,parallel-queue/TESTING.txt $output
++          # Keep the test install separate. The user copies their existing User
++          # folder into this directory once; no credentials enter this repository.
++          Set-Content -LiteralPath "$output/portable.txt" -Value '' -NoNewline
++          Copy-Item parallel-queue/dolphin.patch "$output/source-changes.patch"
++          Set-Content "$output/SOURCE.txt" @"
++          Experimental source: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}
++          Upstream base: https://github.com/project-slippi/Ishiiruka/tree/e7711b104b339a99385f2bb12b472d46140a7bc7
++          See source-changes.patch and the upstream license.txt for corresponding changes and license.
++          "@
++          Get-ChildItem $output -Recurse -File | Where-Object { $_.Extension -in '.pdb','.exp','.lib' } | Remove-Item
++          New-Item -ItemType Directory -Force artifact | Out-Null
++          Compress-Archive -Path "$output/*" -DestinationPath artifact/Slippi-Teams-Priority-Windows-test.zip
++      - name: Upload Windows test ZIP
++        uses: actions/upload-artifact@v4
++        with:
++          name: Slippi-Teams-Priority-Windows-test
++          path: artifact/Slippi-Teams-Priority-Windows-test.zip
++          retention-days: 14
++      - name: Upload build log on failure
++        if: failure()
++        uses: actions/upload-artifact@v4
++        with:
++          name: Windows-build-log
++          path: windows-build.binlog
++          if-no-files-found: ignore
+diff --git a/Development/SingleInstance/BuildKit/README.md b/Development/SingleInstance/BuildKit/README.md
+new file mode 100644
+index 0000000..a8f0acd
+--- /dev/null
++++ b/Development/SingleInstance/BuildKit/README.md
+@@ -0,0 +1,42 @@
++# Preflight Teams Priority — experimental single-window build
++
++This small project builds a modified Slippi Dolphin 3.6.4 on GitHub's Windows
++runner. It contains source changes and a checksum-bound patch recipe. It does
++not contain a Melee ISO, Preflight DAT/DOL files, or Slippi account credentials.
++
++The game adapter adds **Play singles → Unranked / Direct** to Preflight's pause
++menu. Teams must be queued first. When every Teams peer connects, the modified
++emulator ends singles and the game adapter attempts to enter Teams in the same
++window. This is an experimental first implementation; successful compilation
++and simulated tests do not establish live matchmaking compatibility.
++
++## Build
++
++1. Create a free GitHub account, verify its email, and create a new **public**
++   repository named `preflight-teams-priority`.
++2. On the empty repository page, click **uploading an existing file**. Open the
++   extracted kit folder, select ALL its contents, and drag those items into the
++   upload page. Keep the folder structure. Click **Commit changes**.
++3. Open **Actions → Build Windows Teams Priority test**. The upload should
++   trigger a run; otherwise click **Run workflow**. No signing secrets are used.
++4. After a green run, open it and download **Slippi-Teams-Priority-Windows-test**
++   under **Artifacts**. Extract both the artifact wrapper and the test ZIP inside.
++5. Follow the included `TESTING.txt`. Never upload your ISO or `user.json` here.
++
++If the run fails, share the Actions run URL. A failed build does not produce a
++playable release. GitHub may require account verification before running Actions.
++For a public repository, standard hosted Windows runners are free under GitHub's
++current Actions policy; do not enable paid or larger runners for this project.
++
++## Source and reproducibility
++
++`parallel-queue/dolphin.patch` applies to project-slippi/Ishiiruka tag v3.6.4
++(commit e7711b104b339a99385f2bb12b472d46140a7bc7). It includes the native changes,
++PowerPC adapter source, module builder and isolated tests. The workflow fetches
++that upstream source and its pinned submodules, applies the patch, tests the
++small Windows components, and builds the ordinary WX frontend.
++
++The original Preflight mod is by Aitch. This project is an independent
++experimental integration, not an official Preflight or Slippi release. We have
++compiled original-module exports rather than Aitch's original source tree.
++The adapter source is GPLv2+; the Dolphin patch is subject to Dolphin's license.
+diff --git a/Development/SingleInstance/BuildKit/TESTING.txt b/Development/SingleInstance/BuildKit/TESTING.txt
+new file mode 100644
+index 0000000..7ad4e24
+--- /dev/null
++++ b/Development/SingleInstance/BuildKit/TESTING.txt
+@@ -0,0 +1,54 @@
++FIRST LIVE TEST — experimental one-window Teams priority
++
++This is a test build. Live Teams handoff has not been verified by its author.
++Use cooperative test opponents who expect the singles disconnect.
++There is one emulated game and one native controller path. No desktop helper,
++second instance, controller pipe, DTM startup recording or custom hotkey is used.
++
++SETUP (once)
++1. Extract the whole test ZIP to a NEW folder. Do not replace Slippi Launcher's
++   Dolphin. Keep all included DLLs and the Sys folder together.
++2. Copy your existing Dolphin User folder into this test folder as "User".
++   It should contain Config and Slippi, with Slippi\user.json inside. A normal
++   Windows user folder is Documents\Dolphin Emulator. Keep that original intact.
++   Never share user.json. If the source folder is unclear, skip this copy and
++   log in once in the test build instead.
++3. Double-click Patch-Preflight.cmd. Choose your original working Preflight v1.1
++   ISO, then save a NEW ISO, e.g. Preflight-ParallelQueue-test.iso.
++   The original is preserved. The patcher rejects a different unsupported ISO.
++4. Launch the included Slippi Dolphin.exe and open the NEW patched ISO.
++   Its title includes [Teams Priority test]. Configure Port 1 to GameCube
++   Adapter for Wii U for your Phob/Lossless adapter, as in ordinary Slippi.
++   Set other ports normally for your setup. Only this one instance uses USB.
++
++TEST
++1. At Slippi's online character select, use L+R to enter Preflight as usual.
++2. Choose your character/stage and enter practice. Pause with Start.
++3. Use Preflight's existing Queue menu to search Teams with your usual code,
++   EC@918. Your teammate queues normally from their own computer.
++4. Open the new Play singles menu and select Unranked. Enter a singles game.
++   Direct is available for a separate test with a cooperative opponent.
++   For this first implementation, queue Teams BEFORE starting singles. Starting
++   a Teams search from inside an already-running singles match is not provided.
++5. When ALL Teams peers connect, singles should disconnect. Allow the ordinary
++   game-end/report/replay and character-select transitions to finish. Teams
++   should then load in that SAME Dolphin window using the saved Teams choices.
++   The singles game ends; it is not paused for later resumption.
++
++CHECK
++- Native Phob/Lossless inputs work before and after the transition.
++- Teams retains the intended code, character, color and team.
++- Cancelling singles does not cancel the waiting Teams search.
++- Cancel Teams in the new submenu cancels only the parked background search.
++- An assignment alone, or a failed Teams connection, does not interrupt singles.
++
++If no Play singles row appears, verify BOTH the new ISO and the modified test
++Dolphin are in use. Stock Dolphin deliberately does not expose the new option.
++If takeover stalls, record the visible scene/mode and relevant SLIPPI_ONLINE log
++messages (especially [Parallel queue]). Do not share credentials or an unfiltered
++log containing account data. This first build does not automatically recover a
++failed Teams handoff or automatically start the next Teams search.
++
++If Slippi says the ISO is invalid, a peer disconnects, or Teams fails to load,
++stop this test and report what happened. Return to your original Slippi/ISO by
++closing this build and opening Slippi Launcher normally.
+diff --git a/Development/SingleInstance/Game/ppc_restore.S b/Development/SingleInstance/Game/ppc_restore.S
+new file mode 100644
+index 0000000..0663a91
+--- /dev/null
++++ b/Development/SingleInstance/Game/ppc_restore.S
+@@ -0,0 +1,30 @@
++/* Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+.
++ * GCC -Os leaf epilogues used by these small EABI adapters. r11 holds the
++ * caller's stack pointer; saved registers live at -8/-4 and the LR at +4.
++ */
++.text
++.balign 4
++.global _restgpr_26_x
++.global _restgpr_27_x
++.global _restgpr_28_x
++.global _restgpr_29_x
++.global _restgpr_30_x
++.global _restgpr_31_x
++_restgpr_26_x:
++    lwz 26,-24(11)
++_restgpr_27_x:
++    lwz 27,-20(11)
++_restgpr_28_x:
++    lwz 28,-16(11)
++_restgpr_29_x:
++    lwz 29,-12(11)
++_restgpr_30_x:
++    lwz 30,-8(11)
++_restgpr_31_x:
++    lwz 31,-4(11)
++    lwz 0,4(11)
++    mtlr 0
++    mr 1,11
++    blr
++
++.section .note.GNU-stack,"",@progbits
+diff --git a/Development/SingleInstance/Game/preflight_hooks.c b/Development/SingleInstance/Game/preflight_hooks.c
+new file mode 100644
+index 0000000..58cb9ff
+--- /dev/null
++++ b/Development/SingleInstance/Game/preflight_hooks.c
+@@ -0,0 +1,130 @@
++/* Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+.
++ * Adapter for the exact supplied Preflight v1.1 modules. The patch builder
++ * resolves these imports using verified module offsets, never a runtime base.
++ * EXPERIMENTAL: static and protocol tests do not establish game compatibility.
++ */
++#include "queue_client.h"
++
++typedef struct MenuRow {
++    const char *name, *value;
++    uint32_t inline_value;
++    void (*press)(struct MenuRow *), (*adjust)(struct MenuRow *);
++    uint32_t state, argument;
++    void *context;
++    uint32_t colors[3];
++} MenuRow;
++extern void Slippi_EXI_Transfer(void *, uint32_t, uint8_t);
++extern void Scene_ExitMinor(void), Scene_SetNextMinor(int), Scene_SetNextMajor(int), Scene_CommitMajor(void);
++extern volatile uint8_t scene_info[], online_mode, chose_stage;
++static PFQ_Client client;
++static PFQ_Reply reply;
++
++static int query(void) { return PFQ_Call(&client, PFQ_STATUS, 0, &reply); }
++static int ready(void) { return (reply.flags & 7) == 3; }
++static void cleanup(void)
++{
++    uint8_t command = 0xba;
++    Slippi_EXI_Transfer(&command, 1, 1);
++}
++static void probe(void)
++{
++    PFQ_Init(&client, Slippi_EXI_Transfer);
++    PFQ_Probe(&client, &reply);
++}
++
++#ifdef PFQ_PRACTICE
++extern void Original_Entry(void), Original_Frame(void *);
++extern void Original_Unranked(MenuRow *), Original_Direct(MenuRow *);
++extern uint32_t root_row_count, queue_counter;
++extern uint8_t exit_to_slippi, singles_context[];
++extern void *menu_head;
++
++static void leave_practice(void)
++{
++    cleanup();
++    online_mode = 3;
++    queue_counter = 0;
++    exit_to_slippi = 1;
++    Scene_ExitMinor();
++}
++void PFQ_Entry(void)
++{
++    Original_Entry();
++    if (scene_info[0] != 0x1c || scene_info[3] != 2) return;
++    *(void **)singles_context = menu_head;
++    menu_head = singles_context;
++    probe();
++    root_row_count = client.available ? 6 : 5;
++}
++void PFQ_PlaySingles(MenuRow *row)
++{
++    if (query() != PFQ_OK) return;
++    if (ready()) { leave_practice(); return; }
++    if (!(reply.flags & 1) && PFQ_Call(&client, PFQ_PARK_TEAMS, 0, &reply) != PFQ_OK) {
++        row->value = "Queue Teams first";
++        return;
++    }
++    if (reply.flags & 4) { row->value = "Teams failed"; return; }
++    row->value = 0;
++    /* Reuse the existing Unranked callback or Direct code-entry UI. Their
++       cleanup now operates on the new foreground, leaving Teams untouched. */
++    if (row->argument == 1) Original_Unranked(row);
++    else Original_Direct(row);
++}
++void PFQ_CancelTeams(MenuRow *row)
++{
++    if (query() != PFQ_OK) return;
++    if (!(reply.flags & 1)) { row->value = "No queue"; return; }
++    if (PFQ_Call(&client, PFQ_CANCEL_TEAMS, reply.generation, &reply) == PFQ_OK)
++        row->value = "Cancelled";
++}
++void PFQ_Frame(void *object)
++{
++    if (query() == PFQ_OK && ready()) { leave_practice(); return; }
++    Original_Frame(object);
++}
++#else
++extern void Original_Entry(void), Original_Frame(void *), Original_OnExit(void);
++extern uint8_t lr_exit;
++/* 1: restart CSS in Teams mode before activating; 2: wait for the previous
++   report/replay to drain; 3: handoff completed. Reset on each scene entry. */
++static uint8_t phase;
++void PFQ_Entry(void)
++{
++    phase = 0;
++    lr_exit = 0;
++    Original_Entry();
++    probe();
++}
++void PFQ_OnExit(void)
++{
++    Original_OnExit();
++    if (phase != 1) return;
++    /* Original_OnExit first restores Preflight's original scene callback and
++       runs ordinary Slippi cleanup. Re-enter a fresh Teams CSS afterwards. */
++    Scene_SetNextMinor(0);
++    Scene_SetNextMajor(8);
++    Scene_CommitMajor();
++}
++void PFQ_Frame(void *object)
++{
++    if (scene_info[0] == 8 && scene_info[3] == 0 && query() == PFQ_OK && ready()) {
++        if (online_mode != 3) {
++            if (phase != 1) {
++                cleanup();
++                online_mode = 3;
++                phase = 1;
++                Scene_ExitMinor();
++            }
++            return;
++        }
++        if (phase != 2) { cleanup(); phase = 2; }
++        if (PFQ_Call(&client, PFQ_ACTIVATE_TEAMS, reply.generation, &reply) == PFQ_OK) {
++            chose_stage = 1;
++            phase = 3;
++        }
++        return;
++    }
++    Original_Frame(object);
++}
++#endif
+diff --git a/Development/SingleInstance/Game/queue_client.c b/Development/SingleInstance/Game/queue_client.c
+new file mode 100644
+index 0000000..c7025a5
+--- /dev/null
++++ b/Development/SingleInstance/Game/queue_client.c
+@@ -0,0 +1,60 @@
++/* Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+. */
++#include "queue_client.h"
++
++static uint32_t read32(const uint8_t *p)
++{
++    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
++}
++static void clear_reply(PFQ_Reply *reply)
++{
++    if (reply) {
++        reply->result = 255; reply->flags = 0; reply->foreground_mode = 255;
++        reply->generation = 0; reply->capabilities = 0;
++    }
++}
++static int request(PFQ_Client *client, uint8_t operation, uint32_t generation, PFQ_Reply *reply)
++{
++    uint8_t tx[13] = {0xe6, 'P', 'F', 'D', 'Q', 1, 0, 0, 0, 0, 0, 0, 0};
++    uint8_t rx[16] = {0};
++    clear_reply(reply);
++    if (!client || !client->transfer || !reply) return PFQ_UNAVAILABLE;
++    tx[6] = operation;
++    tx[9] = (uint8_t)(generation >> 24);
++    tx[10] = (uint8_t)(generation >> 16);
++    tx[11] = (uint8_t)(generation >> 8);
++    tx[12] = (uint8_t)generation;
++    client->transfer(tx, sizeof(tx), 1);
++    client->transfer(rx, sizeof(rx), 0);
++    if (rx[0] != 'P' || rx[1] != 'F' || rx[2] != 'D' || rx[3] != 'Q' || rx[4] != 1 ||
++        (read32(rx + 12) & 15) != 15 || rx[5] > 10 || (rx[6] & 248) != 0 ||
++        ((rx[6] & 6) != 0 && (rx[6] & 1) == 0) || (rx[6] & 6) == 6 ||
++        (rx[7] > 4 && rx[7] != 255))
++    {
++        client->available = 0;
++        return PFQ_UNAVAILABLE;
++    }
++    reply->result = rx[5];
++    reply->flags = rx[6];
++    reply->foreground_mode = rx[7];
++    reply->generation = read32(rx + 8);
++    reply->capabilities = read32(rx + 12);
++    return reply->result;
++}
++void PFQ_Init(PFQ_Client *client, PFQ_Transfer transfer)
++{
++    if (client) { client->transfer = transfer; client->available = 0; }
++}
++int PFQ_Probe(PFQ_Client *client, PFQ_Reply *reply)
++{
++    int result;
++    if (!client) return PFQ_UNAVAILABLE;
++    client->available = 0;
++    result = request(client, PFQ_CAPABILITIES, 0, reply);
++    if (result == PFQ_OK) client->available = 1;
++    return result;
++}
++int PFQ_Call(PFQ_Client *client, uint8_t operation, uint32_t generation, PFQ_Reply *reply)
++{
++    if (!client || !client->available) { clear_reply(reply); return PFQ_UNAVAILABLE; }
++    return request(client, operation, generation, reply);
++}
+diff --git a/Development/SingleInstance/Game/queue_client.h b/Development/SingleInstance/Game/queue_client.h
+new file mode 100644
+index 0000000..1cf9fd5
+--- /dev/null
++++ b/Development/SingleInstance/Game/queue_client.h
+@@ -0,0 +1,25 @@
++/* Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+. */
++#ifndef PREFLIGHT_QUEUE_CLIENT_H
++#define PREFLIGHT_QUEUE_CLIENT_H
++#include <stdint.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* Same call shape as Slippi's existing EXI transfer routine. */
++typedef void (*PFQ_Transfer)(void *buffer, uint32_t length, uint8_t write);
++typedef struct { PFQ_Transfer transfer; uint8_t available; } PFQ_Client;
++typedef struct {
++    uint8_t result, flags, foreground_mode;
++    uint32_t generation, capabilities;
++} PFQ_Reply;
++enum { PFQ_CAPABILITIES = 0, PFQ_PARK_TEAMS = 1, PFQ_STATUS = 2,
++       PFQ_ACTIVATE_TEAMS = 3, PFQ_CANCEL_TEAMS = 4 };
++enum { PFQ_OK = 0, PFQ_UNAVAILABLE = -1 };
++void PFQ_Init(PFQ_Client *client, PFQ_Transfer transfer);
++int PFQ_Probe(PFQ_Client *client, PFQ_Reply *reply);
++int PFQ_Call(PFQ_Client *client, uint8_t operation, uint32_t generation, PFQ_Reply *reply);
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/Development/SingleInstance/GameClientTest.cpp b/Development/SingleInstance/GameClientTest.cpp
+new file mode 100644
+index 0000000..931b7b8
+--- /dev/null
++++ b/Development/SingleInstance/GameClientTest.cpp
+@@ -0,0 +1,63 @@
++// Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+.
++#include "Core/Slippi/SlippiQueueControl.h"
++#include "Game/queue_client.h"
++#include <array>
++#include <cstring>
++#include <iostream>
++#include <stdexcept>
++
++using Q = SlippiQueueControl;
++struct Backend : Q::Backend
++{
++  bool present=false, ready=false, busy=false;
++  Q::Mode mode=Q::Mode::Teams;
++  Q::Mode ForegroundMode() const override {return mode;}
++  bool ForegroundBusy() const override {return busy;}
++  bool CanParkTeams() const override {return true;}
++  bool HasTeams() const override {return present;}
++  bool TeamsReady() const override {return ready;}
++  bool TeamsFailed() const override {return false;}
++  void ParkTeams() override {present=true;mode=Q::Mode::None;}
++  void ActivateTeams() override {present=false;mode=Q::Mode::Teams;}
++  void CancelTeams() override {present=false;}
++} backend;
++Q host;
++Q::Reply response{};
++std::array<std::uint8_t,13> last_request{};
++bool stock=false;
++int writes=0, checks=0;
++void Check(bool v,const char* reason){if(!v)throw std::runtime_error(reason);++checks;}
++void Transfer(void* data,std::uint32_t length,std::uint8_t write)
++{
++  if(write)
++  {
++    if(length!=13||static_cast<std::uint8_t*>(data)[0]!=Q::Command)throw std::runtime_error("incorrect EXI request framing");
++    std::memcpy(last_request.data(),data,length);++writes;
++    response=stock?Q::Reply{}:host.Handle(last_request.data()+1,12,backend);
++  }
++  else
++  {
++    if(length!=16)throw std::runtime_error("incorrect EXI response length");
++    std::memcpy(data,response.data(),16);
++  }
++}
++int main()
++{
++  PFQ_Client client;PFQ_Reply reply{};PFQ_Init(&client,Transfer);
++  Check(PFQ_Call(&client,PFQ_PARK_TEAMS,0,&reply)==PFQ_UNAVAILABLE&&writes==0,"unprobed host cannot receive park request");
++  reply.flags=3;reply.generation=99;
++  stock=true;Check(PFQ_Probe(&client,&reply)==PFQ_UNAVAILABLE&&!client.available,"stock/no-capability host disables extension");
++  Check(reply.flags==0&&reply.generation==0,"failed probe clears stale ready status");
++  int before=writes;Check(PFQ_Call(&client,PFQ_PARK_TEAMS,0,&reply)==PFQ_UNAVAILABLE&&writes==before,"failed probe cannot fall through to park");
++  stock=false;Check(PFQ_Probe(&client,&reply)==PFQ_OK&&client.available&&reply.capabilities==15,"C game client discovers C++ host capabilities");
++  Check(PFQ_Call(&client,PFQ_PARK_TEAMS,0,&reply)==PFQ_OK&&backend.present&&reply.generation!=0,"cross-language park and generation decoding");
++  auto generation=reply.generation;
++  Check(PFQ_Call(&client,PFQ_ACTIVATE_TEAMS,0x01020304,&reply)==static_cast<int>(Q::Result::StaleGeneration),"invalid generation rejected by real host parser");
++  Check(last_request[9]==1&&last_request[10]==2&&last_request[11]==3&&last_request[12]==4,"wire generation uses big-endian bytes on either host architecture");
++  backend.ready=true;backend.busy=true;
++  Check(PFQ_Call(&client,PFQ_STATUS,0,&reply)==PFQ_OK&&(reply.flags&3)==3,"ready state visible without switching game");
++  Check(PFQ_Call(&client,PFQ_ACTIVATE_TEAMS,generation,&reply)==static_cast<int>(Q::Result::Busy)&&backend.present,"caller cannot bypass live-game guard");
++  backend.busy=false;Check(PFQ_Call(&client,PFQ_ACTIVATE_TEAMS,generation,&reply)==PFQ_OK&&!backend.present,"safe handoff completed through actual C/C++ wire contract");
++  Check(PFQ_Call(&client,PFQ_CANCEL_TEAMS,generation,&reply)==static_cast<int>(Q::Result::StaleGeneration),"old cancellation cannot affect activated Teams");
++  std::cout<<checks<<" C game-client / C++ host protocol integration checks passed. No game or network ran.\n";
++}
+diff --git a/Development/SingleInstance/PreflightFindings-2026-11-16.md b/Development/SingleInstance/PreflightFindings-2026-11-16.md
+new file mode 100644
+index 0000000..1763f8d
+--- /dev/null
++++ b/Development/SingleInstance/PreflightFindings-2026-11-16.md
+@@ -0,0 +1,75 @@
++# Verified Preflight v1.1 findings — 2026-11-16
++
++Inputs are local user exports, not instructions or editable author source.
++The patch ZIP contains patch.xdelta and patching tools. Exact later exports
++supplied main.dol, filesystem metadata, tm.dat, other.dat and codes.gct.
++
++| File | Bytes | SHA-256 |
++|---|---:|---|
++| main.dol | 4425184 | f604e1399f2dc88e2fbbaa2b3441867ca34d00b99b82e16bee4e4ef108604805 |
++| tm.dat | 95720 | 2a46fda61b0b175c425687bab074b9b06606325bedf3caa5c39e1984007da920 |
++| other.dat | 1304 | 85757d8ede9fef7b69e522fb4a7e38f2f126758f918f6dae14276043c42ca76b |
++| codes.gct | 1312 | 1fdf6c7f11268e39d6bd68124b1b287008869f3e941851eb19b23a34dd54701d |
++
++The supplied disc is GALE01 revision 2, 1,459,978,240 bytes. Its DOL starts at
++124,928. tm.dat has 2,584 bytes of padding before other.dat. Exact module data
++matches all bytes recovered earlier from the xdelta patch.
++
++## Module and scene layout
++
++The DAT files are HSD function archives with root `fns`. Code references use
++loader relocations 1 (ADDR32), 4 (ADDR16_LO), 6 (ADDR16_HA), 10 (REL24) and
++26 (REL32). tm.dat's original code/data length is 0x13A00, with 1,905 code
++relocation records and export 0 at offset 0x9054. other.dat has code/data length
++0x3A8, 34 relocations and export 0 at 0x208. The GCT scene loader loads these
++archives through 0x803D709C. The compiler strings identify GCC/devkitPPC 16.1.0
++and src/tm.c, src/cpu4.c. These are evidence of a compiled PowerPC project,
++not recovery of Aitch's original C source or its build environment.
++
++Scene major 0x1C is training: minors 0 CSS, 1 SSS, 2 practice. Major 8/minor 0
++is the Slippi/VS CSS. other.dat implements L+R and installs a scene-decision
++callback. A practice exit uses the original engine scene functions to return
++to Slippi. Slippi's EXI transfer function is at 0x800055F0. The actual supplied
++DOL sets r2=0x804DF9E0, r13=0x804DB6A0. Online mode is at 0x804D6640;
++0x804D666A is the chose-stage flag, not an invented takeover flag.
++
++## Verified menu structures (module-relative offsets)
++
++Menu rows are 44 bytes: label +0, value label +4, inline value +8,
++press/adjust callbacks +C/+10, state +14, argument +18, context +1C,
++and colors +20/+24/+28. Contexts are 0x80 bytes: next +0, update +4,
++draw +8, row count +C, cursor +10 and row table +14, followed by interpolation
++and style state. Context `next` is an update/draw list, NOT the navigation parent.
++The submenu navigation stack is separate. New contexts must join this list.
++
++- General context 0xC488, 5 rows at 0x9E5C. The apparently empty row at 0x9E88
++  is dynamically populated CPU Actions; it must be retained.
++- Queue context 0xC408, 6 rows at 0x9F38. Ranked/Unranked use 0x4884;
++  Direct uses 0x4588 and context 0xC308; Teams uses 0x4660.
++- Queue callbacks write the shared Slippi mode byte, send selections B5 and
++  search B4, and normally cancel any current foreground with BA.
++- Practice queue polling is 0x8D40 through context callback site 0xC28C.
++  Practice main think 0x4A1C walks the entire context update list every frame,
++  independently of which submenu is open.
++- Practice exit callback 0x4410 uses local flag 0xA1BC to return to major 8.
++  It copies selected character/color from packet 0xC520 and sets chose-stage.
++- other.dat frame callback is 0, scene-exit callback 0xE8 and entry 0x208.
++  L+R requests a normal minor exit, then the exit callback selects training.
++
++## Experimental adapter output
++
++Our adapter changes exported entry callbacks, hooks the existing polling/frame
++callbacks and adds the new menu using existing styles. The native layer parks
++Teams BEFORE existing singles callbacks can send BA, so their cleanup affects
++only the fresh singles context. Native gameplay priority uses fully connected
++Teams peers, rather than server assignment. Real scene behavior still requires
++live testing; simulated imports cannot verify the game's complete control flow.
++
++Patched outputs currently have these hashes:
++
++- tm.dat, 98,296 bytes: 4a9ce479962736c71c01ab507020b462c24cd12b2ca4bd943712d6344d677326
++- other.dat, 2,796 bytes: 14ee30d897f81802102a08550eb1435ea68566782fff55d6768e32f155d559df
++
++These compiled artifacts and private Ghidra/decompilation work stay local.
++The distributable patch uses checksum-bound COPY/DATA recipes and our source.
++No original game module, DOL, ISO or login file is included in the build kit.
+diff --git a/Development/SingleInstance/QueueControlTest.cpp b/Development/SingleInstance/QueueControlTest.cpp
+new file mode 100644
+index 0000000..263092c
+--- /dev/null
++++ b/Development/SingleInstance/QueueControlTest.cpp
+@@ -0,0 +1,100 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++#include "Core/Slippi/SlippiQueueControl.h"
++#include <iostream>
++#include <stdexcept>
++
++using Control = SlippiQueueControl;
++using Op = Control::Op;
++using Result = Control::Result;
++struct FakeBackend : Control::Backend
++{
++  Control::Mode mode = Control::Mode::Teams;
++  bool busy = false, parkable = true, parked = false, ready = false, failed = false;
++  int foreground_identity = 100, teams_identity = 0;
++  int parks = 0, activations = 0, cancellations = 0;
++  Control::Mode ForegroundMode() const override { return mode; }
++  bool ForegroundBusy() const override { return busy; }
++  bool CanParkTeams() const override { return parkable; }
++  bool HasTeams() const override { return parked; }
++  bool TeamsReady() const override { return ready && !failed; }
++  bool TeamsFailed() const override { return failed; }
++  void ParkTeams() override { teams_identity = foreground_identity; foreground_identity = 200; mode = Control::Mode::None; parked = true; ++parks; }
++  void ActivateTeams() override { foreground_identity = teams_identity; teams_identity = 0; parked = false; mode = Control::Mode::Teams; ++activations; }
++  void CancelTeams() override { teams_identity = 0; parked = false; ++cancellations; }
++};
++int checks = 0;
++void Check(bool v, const char* why) { if (!v) throw std::runtime_error(why); ++checks; }
++std::array<std::uint8_t, 12> Request(Op op, std::uint32_t token = 0)
++{
++  return {{'P','F','D','Q',1,static_cast<std::uint8_t>(op),0,0,
++    static_cast<std::uint8_t>(token >> 24),static_cast<std::uint8_t>(token >> 16),
++    static_cast<std::uint8_t>(token >> 8),static_cast<std::uint8_t>(token)}};
++}
++std::uint32_t Token(const Control::Reply& r) { return (std::uint32_t(r[8]) << 24) | (std::uint32_t(r[9]) << 16) | (std::uint32_t(r[10]) << 8) | r[11]; }
++Result Status(const Control::Reply& r) { return static_cast<Result>(r[5]); }
++Control::Reply Call(Control& c, FakeBackend& b, Op op, std::uint32_t token = 0)
++{
++  auto r = Request(op, token); return c.Handle(r.data(), r.size(), b);
++}
++int main()
++{
++  for (int mode : {0,1,2,3,4,255})
++    for (bool connected : {false,true})
++      for (bool ready : {false,true})
++        Check(Control::ShouldYieldToTeams(static_cast<Control::Mode>(mode), connected, ready) ==
++              ((mode == 1 || mode == 2) && connected && ready),
++              "only connected Direct/Unranked yield to connected Teams");
++  Control c; FakeBackend b;
++  auto r = Call(c,b,Op::Capabilities);
++  Check(r[0]=='P' && r[3]=='Q' && r[4]==1 && r[15]==15, "explicit version/capability reply");
++  Check(b.parks==0 && b.activations==0 && b.cancellations==0, "discovery does not mutate sessions");
++  for (std::size_t size = 0; size < 20; ++size)
++  {
++    if (size==12) continue;
++    auto q=Request(Op::ParkTeams);
++    Check(Status(c.Handle(q.data(),size,b))==Result::Malformed, "bad length rejected before access");
++  }
++  Check(Status(c.Handle(nullptr,12,b))==Result::Malformed, "null request rejected");
++  for (int index : {0,1,2,3,6,7})
++  {
++    auto q=Request(Op::ParkTeams);q[index]^=32;
++    Check(Status(c.Handle(q.data(),q.size(),b))==Result::Malformed, "signature/reserved fields checked");
++  }
++  auto q=Request(Op::ParkTeams);q[4]=2;
++  Check(Status(c.Handle(q.data(),q.size(),b))==Result::UnsupportedVersion, "version mismatch cannot park");
++  q=Request(Op::ParkTeams);q[5]=255;
++  Check(Status(c.Handle(q.data(),q.size(),b))==Result::UnsupportedOperation, "unknown operation rejected");
++  Check(b.parks==0, "invalid packets never change foreground ownership");
++  b.mode=Control::Mode::Ranked;
++  Check(Status(Call(c,b,Op::ParkTeams))==Result::WrongMode, "Ranked cannot become background search");
++  b.mode=Control::Mode::Unranked;
++  Check(Status(Call(c,b,Op::ParkTeams))==Result::WrongMode, "only Teams can be parked");
++  b.mode=Control::Mode::Teams;b.parkable=false;
++  Check(Status(Call(c,b,Op::ParkTeams))==Result::Busy, "active/unsafe Teams session cannot park");
++  b.parkable=true;
++  Check(Status(Call(c,b,Op::ParkTeams,7))==Result::StaleGeneration, "park must start without a token");
++  r=Call(c,b,Op::ParkTeams);auto generation=Token(r);
++  Check(Status(r)==Result::Ok && generation!=0 && (r[6]&1), "Teams search retained with generation");
++  Check(b.foreground_identity==200 && b.teams_identity==100 && b.parks==1, "foreground and standby keep distinct identities");
++  Check(Status(Call(c,b,Op::ParkTeams))==Result::AlreadyParked && b.parks==1, "duplicate park does not lose Teams");
++  Check(Status(Call(c,b,Op::ActivateTeams,0))==Result::StaleGeneration, "zero token cannot activate");
++  Check(Status(Call(c,b,Op::CancelTeams,generation+1))==Result::StaleGeneration && b.parked, "stale cancellation preserves current Teams");
++  Check(Status(Call(c,b,Op::ActivateTeams,generation))==Result::NotReady, "assignment alone cannot take over");
++  b.mode=Control::Mode::Direct;b.busy=true;b.ready=true;
++  Check(Status(Call(c,b,Op::ActivateTeams,generation))==Result::Busy && b.activations==0, "live singles must exit before Teams activation");
++  r=Call(c,b,Op::Status);
++  Check((r[6]&3)==3 && b.mode==Control::Mode::Direct, "ready status does not silently swap live game");
++  b.busy=false;r=Call(c,b,Op::ActivateTeams,generation);
++  Check(Status(r)==Result::Ok && b.foreground_identity==100 && b.mode==Control::Mode::Teams && !b.parked, "explicit safe activation restores same Teams identity");
++  Check(Status(Call(c,b,Op::ActivateTeams,generation))==Result::StaleGeneration && b.activations==1, "late singles event cannot reactivate old generation");
++  b.foreground_identity=300;r=Call(c,b,Op::ParkTeams);generation=Token(r);
++  b.mode=Control::Mode::Unranked;b.busy=true;
++  Check(Status(Call(c,b,Op::CancelTeams,generation))==Result::Ok && b.foreground_identity==200 && b.mode==Control::Mode::Unranked, "cancel background leaves live singles intact");
++  Check(Status(Call(c,b,Op::ActivateTeams,Token(Call(c,b,Op::Status))))==Result::NoTeams, "empty standby cannot activate");
++  b.mode=Control::Mode::Teams;Call(c,b,Op::ParkTeams);b.failed=true;b.ready=true;
++  r=Call(c,b,Op::Status);
++  Check((r[6]&4)!=0 && (r[6]&2)==0, "failed connection cannot be reported ready");
++  std::cout << checks << " queue-control protocol/lifecycle checks passed. No online connection or game was run.\n";
++}
+diff --git a/Development/SingleInstance/README.md b/Development/SingleInstance/README.md
+new file mode 100644
+index 0000000..b03c042
+--- /dev/null
++++ b/Development/SingleInstance/README.md
+@@ -0,0 +1,97 @@
++# Singles while Teams searches — one Dolphin instance
++
++Experimental first implementation, 2026-11-16. Target: Windows 11, Slippi 3.6.4,
++Preflight v1.1, one render window and the original GameCube adapter input path.
++There is no desktop switching helper in this implementation.
++
++## Implemented source and compiled game adapter
++
++- EXI owns a parked Teams matchmaking context and a separate foreground context.
++  Character/color/team/code/stages remain attached to the parked Teams search.
++- A private versioned EXI command (E6, PFDQ version 1) discovers capabilities,
++  parks, queries, activates and cancels Teams. Generation tokens reject stale
++  events. Stock Slippi does not expose the new menu.
++- The active netplay marker uses atomic identity ownership. A standby client's
++  construction/destruction cannot take over or clear another client's marker.
++- Successful Teams peer connections make an active Direct/Unranked game follow
++  the normal disconnect path. Ranked and Teams never yield through this policy.
++- Activation waits for ordinary foreground cleanup, online game end, report
++  submission and asynchronous replay writes. Local practice replay writes do
++  not prevent parking. Replay metadata is snapshotted before queue changes.
++- Rust opaque-device calls share a per-device gate; cleanup workers are joined
++  before the Rust device/user or ENet are destroyed. Concurrent contexts do not
++  bind the same configured netplay port.
++- Compiled PowerPC adapters add Play singles → Unranked / Direct / Cancel Teams
++  to the existing pause menu. They retain the original L+R, direct-code entry,
++  menu rendering and scene callbacks. The new submenu joins the existing menu
++  update/draw chain. The five original root rows remain, including CPU Actions.
++- A ready Teams session leaves practice or restarts the singles CSS in Teams
++  mode, performs normal cleanup, then requests activation. Busy report/replay
++  state is retried without repeatedly cancelling foreground state. Parked Teams
++  selections remain protected through its first game setup.
++
++The first test queues Teams BEFORE entering Unranked. Starting a Teams search
++from inside an already-running singles game is not implemented. The singles
++match ends; it cannot be resumed later. There is no automatic requeue or failed
++handoff recovery yet. Native Phob/Lossless access is retained by using one
++Dolphin; actual hardware timing and live matchmaking remain unverified.
++
++## Validation performed here
++
++- 114 standalone C/C++ checks: active ownership, versioned protocol/generations,
++  priority modes, gameplay/report/replay barriers, serialized Rust access, and
++  the C game client communicating with the real C++ protocol parser.
++- 129 checks executing the compiled big-endian PowerPC adapters under Unicorn
++  with mocked game/EXI services. These check relocated menu registration,
++  stock-host refusal, parking, Unranked/Direct dispatch, cancellation, readiness,
++  CSS restart, busy retries, Teams activation and preserved EABI stack/GPRs.
++- Five changed native translation units compiled against actual Slippi headers
++  to Linux objects. This is not a linked Dolphin application or a Windows build.
++- The PowerShell ISO patcher passed exact synthetic-disc byte comparison,
++  preservation of the original, existing-output refusal, altered-module
++  rejection and insufficient-padding rejection. Its successful output differs
++  only in the two patched modules and their FST size fields.
++
++No live online match, full Dolphin game transition, Windows executable or Phob
++hardware test has run here. The PowerPC tests mock imported game routines; they
++cannot establish the real game's scene ordering. The Windows build workflow is
++prepared but has not run. Treat its first successful output as a test build.
++
++## Supported input and reconstruction
++
++Base emulator: project-slippi/Ishiiruka tag v3.6.4,
++commit e7711b104b339a99385f2bb12b472d46140a7bc7.
++The original Preflight is by Aitch. Its supplied patch and compiled modules are
++not an editable source release. No upstream fork/PR has been published here.
++
++Exact input hashes and structural findings are in PreflightFindings-2026-11-16.md.
++Tools/build_preflight_modules.py rebuilds the HSD function archives from exact
++originals and our relocatable ELF32 PowerPC adapters. It keeps original code and
++global offsets, clones the root rows and a menu context, appends our code, and
++updates relevant relocations and export 0. It refuses unknown originals.
++Analysis base 0x81000000 is arbitrary, never a runtime patch address.
++
++The patched tm.dat is 98,296 bytes (+2,576); its supplied ISO has 2,584 bytes of
++padding before other.dat. The patcher checks actual layout before writing.
++Other.dat becomes 2,796 bytes. main.dol and codes.gct remain unchanged.
++Tools/make_module_delta.py packages COPY/DATA recipes with SHA-256 checks;
++Tools/Patch-Preflight.ps1 uses those recipes to create a NEW ISO, never overwriting
++an existing output or the original. No original DOL/DAT or ISO is distributed.
++
++## Build and first live test
++
++BuildKit contains the GitHub Windows build template and first-test instructions.
++The generated upload kit holds a source patch against the pinned upstream and
++our ISO patch recipe, without user credentials or game exports. The workflow
++checks isolated components on Windows, builds the ordinary WX executable and
++packages its dependencies with the ISO patcher. Original settings are copied by
++the user locally into the test build's portable User folder once.
++
++Live acceptance criteria are still open:
++
++1. Both real matchmaking contexts remain alive with the same account.
++2. Singles selection/disconnection preserves the correct Teams session/ticket.
++3. Fully connected Teams peers trigger one takeover; failed assignments do not.
++4. A real game ends, reports and closes its replay before the correct Teams lobby.
++5. Saved Teams character/color/team and native Phob inputs survive that transition.
++6. Stopping/cancelling/relaunching cleans up the right resources without stalls.
+diff --git a/Development/SingleInstance/RustAccessTest.cpp b/Development/SingleInstance/RustAccessTest.cpp
+new file mode 100644
+index 0000000..4252a42
+--- /dev/null
++++ b/Development/SingleInstance/RustAccessTest.cpp
+@@ -0,0 +1,27 @@
++// Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+.
++#include "Core/Slippi/SlippiRustAccess.h"
++#include <atomic>
++#include <iostream>
++#include <stdexcept>
++#include <thread>
++#include <vector>
++int checks=0;
++void Check(bool v,const char* why){if(!v)throw std::runtime_error(why);++checks;}
++int main()
++{
++  SlippiRustAccess device;auto user=device;auto codes=device;auto matchmaking=device;
++  std::atomic<int> entered{0},overlap{0},total{0};
++  std::vector<std::thread> workers;
++  for(int i=0;i<8;++i)workers.emplace_back([&,i]{
++    auto access=i%3==0?user:i%3==1?codes:matchmaking;
++    for(int n=0;n<2000;++n)access.Call([&]{if(entered.fetch_add(1)!=0)++overlap;++total;entered.fetch_sub(1);});
++  });
++  for(auto& worker:workers)worker.join();
++  Check(total.load()==16000,"all opaque-device operations completed");
++  Check(overlap.load()==0,"copied gates never concurrently enter the same Rust device");
++  Check(device.Call([&]{return user.Call([]{return 42;});})==42,"same-thread nested FFI operations do not deadlock");
++  bool threw=false;try{device.Call([]()->void{throw std::runtime_error("test");});}catch(const std::runtime_error&){threw=true;}
++  Check(threw,"FFI wrapper preserves exceptions");
++  Check(device.Call([]{return 7;})==7,"exception releases device access");
++  std::cout<<checks<<" Rust device access checks passed, including 16000 competing operations. No Rust runtime was run.\n";
++}
+diff --git a/Development/SingleInstance/SessionBarrierTest.cpp b/Development/SingleInstance/SessionBarrierTest.cpp
+new file mode 100644
+index 0000000..9d385b5
+--- /dev/null
++++ b/Development/SingleInstance/SessionBarrierTest.cpp
+@@ -0,0 +1,35 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++#include "Core/Slippi/SlippiSessionBarrier.h"
++#include <iostream>
++#include <stdexcept>
++#include <thread>
++int checks = 0;
++void Check(bool value, const char* reason) { if (!value) throw std::runtime_error(reason); ++checks; }
++int main()
++{
++  SlippiSessionBarrier b;
++  Check(b.Idle(), "fresh session can activate");
++  b.BeginOnlineGame();
++  Check(!b.OnlineIdle(), "online gameplay prevents parking");
++  Check(!b.Idle(), "live gameplay blocks activation");
++  b.EndGame();
++  Check(!b.OnlineIdle(), "outstanding report prevents parking");
++  Check(!b.Idle(), "game end still waits for report");
++  b.ReplayQueued();b.ReportFinished();
++  Check(b.OnlineIdle(), "offline replay drain need not prevent parking practice Teams");
++  Check(!b.Idle(), "finished report still waits for replay worker");
++  std::thread write([&]{b.ReplayWritten();});write.join();
++  Check(b.Idle(), "game, report and replay completed permit handoff");
++  b.BeginOnlineGame();b.ReportFinished();
++  Check(!b.Idle(), "early report does not bypass gameplay exit");
++  b.EndGame();Check(b.Idle(), "reverse report/end order also releases gate");
++  b.ReplayQueued();b.ReplayQueued();
++  Check(!b.Idle(), "multiple replay messages block handoff");
++  b.ReplayWritten();Check(!b.Idle(), "partial replay drain cannot hand off");
++  b.ReplayWritten();Check(b.Idle(), "entire replay drain permits handoff");
++  b.BeginOnlineGame();b.EndGame();b.ReportFinished();
++  Check(b.Idle(), "subsequent singles game has independent lifecycle");
++  std::cout << checks << " game/report/replay handoff barrier checks passed.\n";
++}
+diff --git a/Development/SingleInstance/Tools/Export-Preflight-ModFiles.cmd b/Development/SingleInstance/Tools/Export-Preflight-ModFiles.cmd
+new file mode 100644
+index 0000000..fa33771
+--- /dev/null
++++ b/Development/SingleInstance/Tools/Export-Preflight-ModFiles.cmd
+@@ -0,0 +1,5 @@
++@echo off
++setlocal
++cd /d "%~dp0"
++powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0Export-Preflight-ModFiles.ps1"
++if errorlevel 1 pause
+diff --git a/Development/SingleInstance/Tools/Export-Preflight-ModFiles.ps1 b/Development/SingleInstance/Tools/Export-Preflight-ModFiles.ps1
+new file mode 100644
+index 0000000..de9db3b
+--- /dev/null
++++ b/Development/SingleInstance/Tools/Export-Preflight-ModFiles.ps1
+@@ -0,0 +1,97 @@
++param([string]$IsoPath='', [string]$OutputZip='', [switch]$NoOpen)
++$ErrorActionPreference='Stop'
++function Read-At([IO.BinaryReader]$Reader,[long]$Offset,[int]$Count) {
++    if($Offset -lt 0 -or $Count -lt 0 -or $Offset -gt $Reader.BaseStream.Length-$Count){throw 'A disc structure is outside the input file.'}
++    $Reader.BaseStream.Position=$Offset;$bytes=$Reader.ReadBytes($Count)
++    if($bytes.Length -ne $Count){throw 'The input file ended unexpectedly.'}
++    return ,$bytes
++}
++function Big32([byte[]]$Bytes,[int]$Offset) {
++    if($Offset -lt 0 -or $Offset+4 -gt $Bytes.Length){throw 'Invalid field offset.'}
++    return [uint64]$Bytes[$Offset]*16777216+[uint64]$Bytes[$Offset+1]*65536+[uint64]$Bytes[$Offset+2]*256+[uint64]$Bytes[$Offset+3]
++}
++function Hash([byte[]]$Bytes) {
++    $sha=[Security.Cryptography.SHA256]::Create()
++    try{return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
++}
++$temporary=''
++try {
++    if([string]::IsNullOrWhiteSpace($IsoPath)) {
++        Add-Type -AssemblyName System.Windows.Forms
++        $dialog=New-Object System.Windows.Forms.OpenFileDialog
++        $dialog.Title='Choose the same Preflight ISO you used for the first analysis'
++        $dialog.Filter='Uncompressed GameCube disc|*.iso;*.gcm'
++        try {if($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK){exit 0};$IsoPath=$dialog.FileName}finally{$dialog.Dispose()}
++    }
++    $stream=[IO.File]::Open([IO.Path]::GetFullPath($IsoPath),[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
++    $reader=New-Object IO.BinaryReader($stream)
++    $files=[ordered]@{};$metadata=[ordered]@{};$details=New-Object 'Collections.Generic.List[object]'
++    try {
++        $header=Read-At $reader 0 1088
++        if([Text.Encoding]::ASCII.GetString($header,0,6) -ne 'GALE01' -or (Big32 $header 28) -ne 3258163005){throw 'Choose your already-patched plain Preflight ISO or GCM. ZIP, RVZ and GCZ files are not supported.'}
++        $dolOffset=Big32 $header 1056;$fstOffset=Big32 $header 1060;$fstSize=Big32 $header 1064
++        if($dolOffset -lt 1088 -or $fstOffset -lt 1088 -or $fstSize -lt 12 -or $fstSize -gt 16777216){throw 'Invalid disc header.'}
++        $dh=Read-At $reader $dolOffset 256;[long]$dolSize=256
++        for($i=0;$i -lt 18;$i++) {
++            $offset=Big32 $dh ($i*4);$size=Big32 $dh (144+$i*4)
++            if($size -eq 0){continue}
++            if($offset -lt 256 -or $offset+$size -gt 33554432 -or $dolOffset+$offset+$size -gt $stream.Length){throw 'Invalid executable section.'}
++            $dolSize=[Math]::Max($dolSize,$offset+$size)
++        }
++        $dol=Read-At $reader $dolOffset $dolSize
++        $fst=Read-At $reader $fstOffset $fstSize;$count=Big32 $fst 8
++        if($fst[0] -ne 1 -or $count -lt 1 -or $count -gt 50000 -or $count*12 -gt $fst.Length){throw 'Invalid filesystem table.'}
++        $directories=New-Object 'Collections.Generic.List[object]';$directories.Add([pscustomobject]@{Path='';End=$count})
++        for($i=1;$i -lt $count;$i++) {
++            while($directories.Count -gt 1 -and $i -ge $directories[$directories.Count-1].End){$directories.RemoveAt($directories.Count-1)}
++            $word=Big32 $fst ($i*12);$start=[int]($count*12+($word -band 16777215))
++            if($start -lt $count*12 -or $start -ge $fst.Length){throw 'Invalid filesystem name.'}
++            $end=$start;while($end -lt $fst.Length -and $fst[$end] -ne 0 -and $end-$start -le 4096){$end++}
++            if($end -ge $fst.Length -or $end-$start -gt 4096){throw 'Invalid filesystem name length.'}
++            $name=[Text.Encoding]::UTF8.GetString($fst,$start,$end-$start);$path=$directories[$directories.Count-1].Path+$name
++            $offset=Big32 $fst ($i*12+4);$size=Big32 $fst ($i*12+8)
++            if(($word -shr 24) -eq 1) {
++                if($size -le $i -or $size -gt $directories[$directories.Count-1].End){throw 'Invalid directory subtree.'}
++                $directories.Add([pscustomobject]@{Path=($path+'/');End=$size})
++            } elseif(($word -shr 24) -eq 0) {
++                if($offset+$size -gt $stream.Length){throw 'A disc file is outside the input file.'}
++                if($path -ceq 'tm.dat' -or $path -ceq 'other.dat' -or $path -ceq 'codes.gct') {
++                    if($files.Contains($path)){throw 'Duplicate mod file in the filesystem.'}
++                    if($size -le 0 -or $size -gt 4194304){throw 'Unexpectedly large or empty mod file.'}
++                    $bytes=Read-At $reader $offset $size;$files[$path]=$bytes
++                    $details.Add([pscustomobject]@{Path=$path;Bytes=$bytes.Length;SHA256=(Hash $bytes)})
++                }
++            } else {throw 'Invalid filesystem entry type.'}
++        }
++        foreach($name in @('tm.dat','other.dat','codes.gct')){if(-not $files.Contains($name)){throw "Could not find $name. Choose the same patched Preflight ISO used for your earlier analysis."}}
++        $metadata=[ordered]@{Tool='Preflight focused read-only exporter 1';GameId='GALE01';Revision=$header[7];DiscBytes=$stream.Length;DolSHA256=(Hash $dol);Files=$details.ToArray()}
++    } finally {$reader.Dispose()}
++    if([string]::IsNullOrWhiteSpace($OutputZip)){$OutputZip=Join-Path ([Environment]::GetFolderPath('Desktop')) ('Preflight-ModFiles-'+[DateTime]::Now.ToString('yyyyMMdd-HHmmss')+'.zip')}
++    $OutputZip=[IO.Path]::GetFullPath($OutputZip)
++    if(Test-Path -LiteralPath $OutputZip){throw 'The output ZIP already exists. Choose a new name; existing files were preserved.'}
++    if(-not [IO.Directory]::Exists([IO.Path]::GetDirectoryName($OutputZip))){throw 'The output folder does not exist.'}
++    Add-Type -AssemblyName System.IO.Compression
++    $buffer=New-Object IO.MemoryStream
++    try {
++        $zip=New-Object IO.Compression.ZipArchive($buffer,[IO.Compression.ZipArchiveMode]::Create,$true)
++        try {
++            foreach($name in @('tm.dat','other.dat','codes.gct')) {
++                $entry=$zip.CreateEntry($name);$output=$entry.Open()
++                try{$bytes=[byte[]]$files[$name];$output.Write($bytes,0,$bytes.Length)}finally{$output.Dispose()}
++            }
++            $entry=$zip.CreateEntry('mod-report.json');$output=$entry.Open()
++            try{$json=$metadata|ConvertTo-Json -Depth 6;$bytes=[Text.Encoding]::UTF8.GetBytes($json);$output.Write($bytes,0,$bytes.Length)}finally{$output.Dispose()}
++        } finally {$zip.Dispose()}
++        $temporary=$OutputZip+'.'+[guid]::NewGuid().ToString('N')+'.partial'
++        $output=[IO.File]::Open($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
++        try{$buffer.Position=0;$buffer.CopyTo($output)}finally{$output.Dispose()}
++        [IO.File]::Move($temporary,$OutputZip);$temporary=''
++    } finally {$buffer.Dispose()}
++    Write-Host "Created: $OutputZip" -ForegroundColor Green
++    Write-Host 'Attach that ZIP in this chat. Your ISO was opened read-only and was not changed.'
++    if(-not $NoOpen){Start-Process explorer.exe -ArgumentList ('/select,"'+$OutputZip+'"')}
++} catch {
++    if($temporary.Length -ne 0 -and [IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}
++    Write-Host $_.Exception.Message -ForegroundColor Red
++    exit 1
++}
+diff --git a/Development/SingleInstance/Tools/Patch-Preflight.cmd b/Development/SingleInstance/Tools/Patch-Preflight.cmd
+new file mode 100644
+index 0000000..f40eb55
+--- /dev/null
++++ b/Development/SingleInstance/Tools/Patch-Preflight.cmd
+@@ -0,0 +1,3 @@
++@echo off
++powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0Patch-Preflight.ps1"
++if errorlevel 1 pause
+diff --git a/Development/SingleInstance/Tools/Patch-Preflight.ps1 b/Development/SingleInstance/Tools/Patch-Preflight.ps1
+new file mode 100644
+index 0000000..0ce7e80
+--- /dev/null
++++ b/Development/SingleInstance/Tools/Patch-Preflight.ps1
+@@ -0,0 +1,142 @@
++param([string]$IsoPath='', [string]$OutputIso='', [string]$DeltaPath=(Join-Path $PSScriptRoot 'preflight-parallel-queue.delta.json'), [switch]$NoOpen)
++$ErrorActionPreference='Stop'
++function Read-At([IO.BinaryReader]$Reader,[long]$Offset,[int]$Count) {
++    if($Offset -lt 0 -or $Count -lt 0 -or $Offset -gt $Reader.BaseStream.Length-$Count){throw 'A disc structure is outside the input file.'}
++    $Reader.BaseStream.Position=$Offset;$bytes=$Reader.ReadBytes($Count)
++    if($bytes.Length -ne $Count){throw 'The input file ended unexpectedly.'}
++    return ,$bytes
++}
++function Big32([byte[]]$Bytes,[int]$Offset) {
++    if($Offset -lt 0 -or $Offset+4 -gt $Bytes.Length){throw 'Invalid field offset.'}
++    return [uint64]$Bytes[$Offset]*16777216+[uint64]$Bytes[$Offset+1]*65536+[uint64]$Bytes[$Offset+2]*256+[uint64]$Bytes[$Offset+3]
++}
++function BE32([uint32]$Value) {return ,[byte[]]@(($Value -shr 24), (($Value -shr 16) -band 255), (($Value -shr 8) -band 255), ($Value -band 255))}
++function Hash([byte[]]$Bytes) {
++    $sha=[Security.Cryptography.SHA256]::Create()
++    try{return [BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
++}
++function Apply-Recipe([byte[]]$Original,$Patch) {
++    if($Original.Length -ne $Patch.OriginalBytes -or (Hash $Original) -cne $Patch.OriginalSHA256){throw 'This is not the supported Preflight v1.1 module. No output was written.'}
++    if($Patch.OutputBytes -le 0 -or $Patch.OutputBytes -gt 4194304){throw 'Invalid output size.'}
++    $buffer=New-Object IO.MemoryStream
++    try {
++        foreach($operation in $Patch.Operations) {
++            if($null -ne $operation.Copy) {
++                [long]$start=$operation.Copy;[long]$length=$operation.Length
++                if($start -lt 0 -or $length -lt 0 -or $start -gt $Original.Length-$length){throw 'Invalid patch copy range.'}
++                $buffer.Write($Original,[int]$start,[int]$length)
++            } else {
++                $data=[Convert]::FromBase64String($operation.Data);$buffer.Write($data,0,$data.Length)
++            }
++            if($buffer.Length -gt $Patch.OutputBytes){throw 'Patch exceeds declared output size.'}
++        }
++        $result=$buffer.ToArray()
++        if($result.Length -ne $Patch.OutputBytes -or (Hash $result) -cne $Patch.OutputSHA256){throw 'Patched module failed verification.'}
++        return ,$result
++    } finally {$buffer.Dispose()}
++}
++$temporary=''
++try {
++    $patch=Get-Content -Raw -LiteralPath $DeltaPath | ConvertFrom-Json
++    if($patch.Format -cne 'Preflight parallel queue experimental patch 1'){throw 'Unsupported patch format.'}
++    if([string]::IsNullOrWhiteSpace($IsoPath)) {
++        Add-Type -AssemblyName System.Windows.Forms
++        $dialog=New-Object System.Windows.Forms.OpenFileDialog
++        $dialog.Title='Choose your original, working Preflight v1.1 ISO'
++        $dialog.Filter='Uncompressed GameCube disc|*.iso;*.gcm'
++        try {if($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK){exit 0};$IsoPath=$dialog.FileName}finally{$dialog.Dispose()}
++    }
++    $IsoPath=[IO.Path]::GetFullPath($IsoPath)
++    $reader=New-Object IO.BinaryReader([IO.File]::Open($IsoPath,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read))
++    $files=@{};$allFiles=New-Object 'Collections.Generic.List[object]';$prepared=@{}
++    try {
++        $header=Read-At $reader 0 1088
++        if([Text.Encoding]::ASCII.GetString($header,0,6) -cne 'GALE01' -or $header[7] -ne 2 -or (Big32 $header 28) -ne 3258163005){throw 'Choose the original supported Preflight ISO (GALE01 revision 2).'}
++        $dolOffset=Big32 $header 1056;$fstOffset=Big32 $header 1060;$fstSize=Big32 $header 1064
++        if($dolOffset -lt 1088 -or $fstOffset -lt 1088 -or $fstSize -lt 12 -or $fstSize -gt 16777216){throw 'Invalid disc header.'}
++        $dh=Read-At $reader $dolOffset 256;[long]$dolSize=256
++        for($i=0;$i -lt 18;$i++) {
++            $offset=Big32 $dh ($i*4);$size=Big32 $dh (144+$i*4)
++            if($size -eq 0){continue}
++            if($offset -lt 256 -or $offset+$size -gt 33554432){throw 'Invalid executable section.'}
++            $dolSize=[Math]::Max($dolSize,$offset+$size)
++        }
++        if((Hash (Read-At $reader $dolOffset $dolSize)) -cne $patch.DolSHA256){throw 'The executable does not match this Preflight patch.'}
++        $fst=Read-At $reader $fstOffset $fstSize;$count=Big32 $fst 8
++        if($fst[0] -ne 1 -or $count -lt 1 -or $count -gt 50000 -or $count*12 -gt $fst.Length){throw 'Invalid filesystem table.'}
++        $directories=New-Object 'Collections.Generic.List[object]';$directories.Add([pscustomobject]@{Path='';End=$count})
++        for($i=1;$i -lt $count;$i++) {
++            while($directories.Count -gt 1 -and $i -ge $directories[$directories.Count-1].End){$directories.RemoveAt($directories.Count-1)}
++            $word=Big32 $fst ($i*12);$start=[int]($count*12+($word -band 16777215))
++            if($start -lt $count*12 -or $start -ge $fst.Length){throw 'Invalid filesystem name.'}
++            $end=$start;while($end -lt $fst.Length -and $fst[$end] -ne 0 -and $end-$start -le 4096){$end++}
++            if($end -ge $fst.Length -or $end-$start -gt 4096){throw 'Invalid filesystem name length.'}
++            $name=[Text.Encoding]::UTF8.GetString($fst,$start,$end-$start);$path=$directories[$directories.Count-1].Path+$name
++            $offset=Big32 $fst ($i*12+4);$size=Big32 $fst ($i*12+8)
++            if(($word -shr 24) -eq 1) {
++                if($size -le $i -or $size -gt $directories[$directories.Count-1].End){throw 'Invalid directory subtree.'}
++                $directories.Add([pscustomobject]@{Path=($path+'/');End=$size})
++            } elseif(($word -shr 24) -eq 0) {
++                if($offset+$size -gt $reader.BaseStream.Length){throw 'A disc file is outside the input.'}
++                $record=[pscustomobject]@{Path=$path;Offset=[long]$offset;Size=[int]$size;SizeField=([long]$fstOffset+$i*12+8)}
++                $allFiles.Add($record)
++                if($path -ceq 'tm.dat' -or $path -ceq 'other.dat' -or $path -ceq 'codes.gct') {
++                    if($files.ContainsKey($path)){throw 'Duplicate module.'}
++                    if($size -le 0 -or $size -gt 4194304){throw 'Invalid module size.'}
++                    $files[$path]=$record
++                }
++            } else {throw 'Invalid filesystem entry type.'}
++        }
++        foreach($name in @('tm.dat','other.dat','codes.gct')){if(-not $files.ContainsKey($name)){throw "Missing $name."}}
++        $record=$files['codes.gct']
++        if((Hash (Read-At $reader $record.Offset $record.Size)) -cne $patch.CodesSHA256){throw 'The loader codes do not match this patch.'}
++        foreach($name in @('tm.dat','other.dat')) {
++            $record=$files[$name]
++            $prepared[$name]=Apply-Recipe (Read-At $reader $record.Offset $record.Size) $patch.Files.$name
++            [long]$limit=$reader.BaseStream.Length
++            foreach($other in $allFiles) {
++                if($other.Path -ceq $name -or $other.Size -eq 0){continue}
++                if($other.Offset -lt $record.Offset+$record.Size -and $other.Offset+$other.Size -gt $record.Offset){throw 'Overlapping disc files.'}
++                if($other.Offset -ge $record.Offset){$limit=[Math]::Min($limit,$other.Offset)}
++            }
++            foreach($region in @(@($dolOffset,$dolSize),@($fstOffset,$fstSize))) {
++                if($region[0] -lt $record.Offset+$record.Size -and $region[0]+$region[1] -gt $record.Offset){throw 'Module overlaps executable or filesystem table.'}
++                if($region[0] -ge $record.Offset){$limit=[Math]::Min($limit,$region[0])}
++            }
++            if($record.Offset+$prepared[$name].Length -gt $limit){throw "Not enough padding after $name. This disc layout is unsupported."}
++        }
++    } finally {$reader.Dispose()}
++    if([string]::IsNullOrWhiteSpace($OutputIso)) {
++        Add-Type -AssemblyName System.Windows.Forms
++        $dialog=New-Object System.Windows.Forms.SaveFileDialog
++        $dialog.Title='Save a NEW experimental Preflight ISO';$dialog.Filter='GameCube ISO|*.iso'
++        $dialog.FileName='Preflight-ParallelQueue-test.iso';$dialog.OverwritePrompt=$true
++        try {if($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK){exit 0};$OutputIso=$dialog.FileName}finally{$dialog.Dispose()}
++    }
++    $OutputIso=[IO.Path]::GetFullPath($OutputIso)
++    if(Test-Path -LiteralPath $OutputIso){throw 'Choose a new filename. Existing files are preserved.'}
++    $temporary=$OutputIso+'.'+[Guid]::NewGuid().ToString('N')+'.partial'
++    [IO.File]::Copy($IsoPath,$temporary,$false)
++    $stream=[IO.File]::Open($temporary,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
++    try {
++        foreach($name in @('tm.dat','other.dat')) {
++            $record=$files[$name];[byte[]]$bytes=$prepared[$name]
++            $stream.Position=$record.Offset;$stream.Write($bytes,0,$bytes.Length)
++            $sizeBytes=BE32 $bytes.Length;$stream.Position=$record.SizeField;$stream.Write($sizeBytes,0,4)
++        }
++        $stream.Flush()
++        foreach($name in @('tm.dat','other.dat')) {
++            $record=$files[$name];$stream.Position=$record.Offset;$bytes=New-Object byte[] $prepared[$name].Length
++            if($stream.Read($bytes,0,$bytes.Length) -ne $bytes.Length -or (Hash $bytes) -cne $patch.Files.$name.OutputSHA256){throw 'Output verification failed.'}
++        }
++    } finally {$stream.Dispose()}
++    [IO.File]::Move($temporary,$OutputIso);$temporary=''
++    Write-Host "Saved and verified: $OutputIso" -ForegroundColor Green
++    Write-Host 'Use this ISO with the matching experimental single-instance Dolphin build.'
++    if(-not $NoOpen){Start-Process explorer.exe -ArgumentList ('/select,"'+$OutputIso+'"')}
++} catch {
++    Write-Error $_
++    exit 1
++} finally {
++    if($temporary -and [IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}
++}
+diff --git a/Development/SingleInstance/Tools/README.txt b/Development/SingleInstance/Tools/README.txt
+new file mode 100644
+index 0000000..62dfd3d
+--- /dev/null
++++ b/Development/SingleInstance/Tools/README.txt
+@@ -0,0 +1,13 @@
++Preflight mod-files exporter
++
++1. Extract this ZIP to a new folder.
++2. Double-click Export-Preflight-ModFiles.cmd.
++3. Choose the same already-patched Preflight.iso used for the first analysis.
++4. The tool creates Preflight-ModFiles-<timestamp>.zip on your Desktop and selects
++   it in File Explorer. Attach that generated ZIP in this chat.
++
++Only tm.dat, other.dat, codes.gct and a small metadata report are included.
++The main executable is hashed locally to link this export to the earlier report;
++it is not copied into the ZIP. The input ISO is opened read-only.
++No helper session, .dtm, REA installation, login or user.json is involved.
++Plain ISO/GCM files only. Existing output files are never overwritten.
+diff --git a/Development/SingleInstance/Tools/analyze_preflight.py b/Development/SingleInstance/Tools/analyze_preflight.py
+new file mode 100644
+index 0000000..8bb9a76
+--- /dev/null
++++ b/Development/SingleInstance/Tools/analyze_preflight.py
+@@ -0,0 +1,140 @@
++#!/usr/bin/env python3
++"""Read-only structural analysis of the supplied Preflight HSD function module.
++Offsets remain module-relative unless a user-selected analysis base is supplied.
++This tool does not modify an ISO or produce a playable mod.
++"""
++import argparse
++import collections
++import hashlib
++import json
++from pathlib import Path
++import struct
++
++class Module:
++    def __init__(self, data):
++        self.raw = bytes(data)
++        if len(data) < 40 or len(data) > 16 * 1024 * 1024:
++            raise ValueError('Invalid module size')
++        size, body_size, nrel, nroot, nextern = struct.unpack_from('>5I', data)
++        if size != len(data) or body_size > size - 32:
++            raise ValueError('Invalid archive header')
++        self.body = data[32:32 + body_size]
++        table = 32 + body_size
++        names = table + nrel * 4 + (nroot + nextern) * 8
++        if names > size or nroot > 1024 or nrel > body_size // 4:
++            raise ValueError('Invalid archive tables')
++        def word(offset):
++            if offset < 0 or offset + 4 > len(data):
++                raise ValueError('Invalid word offset')
++            return struct.unpack_from('>I', data, offset)[0]
++        for i in range(nrel):
++            offset = word(table + i * 4)
++            if offset % 4 or offset + 4 > body_size:
++                raise ValueError('Invalid archive relocation')
++        roots = {}
++        for i in range(nroot):
++            offset, name_offset = struct.unpack_from('>2I', data, table + nrel * 4 + i * 8)
++            if offset >= body_size or names + name_offset >= size:
++                raise ValueError('Invalid root')
++            end = data.find(b'\0', names + name_offset)
++            if end < 0:
++                raise ValueError('Unterminated root name')
++            roots[data[names + name_offset:end].decode('ascii')] = offset
++        if 'fns' not in roots or roots['fns'] + 24 > body_size:
++            raise ValueError('Missing function root')
++        self.root_offset = roots['fns']
++        self.code_offset, reloc_offset, reloc_count, lookup, functions, debug = struct.unpack_from('>6I', self.body, self.root_offset)
++        if self.code_offset != 0 or reloc_offset > body_size or reloc_offset + reloc_count * 8 > body_size:
++            raise ValueError('Unsupported function layout')
++        if lookup + functions * 8 > body_size or functions > 10000:
++            raise ValueError('Invalid function lookup')
++        self.code = self.body[:reloc_offset]
++        self.relocs = []
++        sites = set()
++        for i in range(reloc_count):
++            packed, target = struct.unpack_from('>2I', self.body, reloc_offset + i * 8)
++            kind, site = packed >> 24, packed & 0xffffff
++            width = 2 if kind in (4, 6) else 4
++            if kind not in (1, 4, 6, 10, 26) or site % width or site + width > len(self.code) or site in sites:
++                raise ValueError('Unsupported or invalid code relocation')
++            sites.add(site)
++            self.relocs.append({'site': site, 'type': kind, 'target': target})
++        self.exports = [struct.unpack_from('>2I', self.body, lookup + i * 8) for i in range(functions)]
++        if any(off >= len(self.code) or off % 4 for _, off in self.exports):
++            raise ValueError('Invalid export offset')
++
++    def string(self, offset):
++        if not 0 <= offset < len(self.code):
++            return None
++        end = self.code.find(b'\0', offset, min(len(self.code), offset + 256))
++        if end <= offset:
++            return None
++        value = self.code[offset:end]
++        if not all(32 <= x < 127 for x in value):
++            return None
++        return value.decode('ascii')
++
++    def summary(self):
++        by_site = {r['site']: r for r in self.relocs}
++        labels = []
++        wanted = {'Queue', 'Queue Ranked', 'Queue Unranked', 'Queue Direct', 'Queue Teams', 'Queue Party', 'CPU Delay', 'Frame Advance', 'Block Connect Code'}
++        for r in self.relocs:
++            label = self.string(r['target']) if r['type'] == 1 else None
++            if label not in wanted:
++                continue
++            record = {'label': label, 'label_file_offset': 32 + r['target'], 'record_module_offset': r['site']}
++            for delta, key in [(12, 'callback_c'), (16, 'callback_10'), (28, 'context_1c')]:
++                pointer = by_site.get(r['site'] + delta)
++                if pointer and pointer['type'] == 1:
++                    record[key] = pointer['target']
++            if r['site'] + 28 <= len(self.code):
++                record['value_18'] = struct.unpack_from('>I', self.code, r['site'] + 24)[0]
++            labels.append(record)
++        exi_calls = [r for r in self.relocs if r['type'] == 10 and r['target'] == 0x800055f0]
++        return {
++            'sha256': hashlib.sha256(self.raw).hexdigest(), 'bytes': len(self.raw),
++            'code_and_data_bytes': len(self.code), 'root_file_offset': self.root_offset + 32,
++            'exports': [{'index': i, 'module_offset': off, 'file_offset': off + 32} for i, off in self.exports],
++            'relocation_types': dict(collections.Counter(r['type'] for r in self.relocs)),
++            'menu_records': labels, 'exi_transfer_calls': exi_calls,
++            'note': 'Menu field names are offsets; callback semantics require tracing their callers. No runtime addresses are inferred from module-relative offsets.'
++        }
++
++    def relocated(self, base):
++        if base % 4 or base < 0x80000000 or base + len(self.code) > 0x81800000:
++            raise ValueError('Choose an aligned MEM1 analysis base')
++        data = bytearray(self.code)
++        for r in self.relocs:
++            site, kind, target = r['site'], r['type'], r['target']
++            value = target if target >= 0x80000000 else base + target
++            if kind == 1:
++                struct.pack_into('>I', data, site, value)
++            elif kind == 4:
++                struct.pack_into('>H', data, site, value & 0xffff)
++            elif kind == 6:
++                struct.pack_into('>H', data, site, ((value + 0x8000) >> 16) & 0xffff)
++            elif kind == 10:
++                delta = value - (base + site)
++                if delta % 4 or not -(1 << 25) <= delta < (1 << 25):
++                    raise ValueError('Branch target out of range at analysis base')
++                instruction = struct.unpack_from('>I', data, site)[0]
++                if instruction >> 26 != 18:
++                    raise ValueError('REL24 site is not a branch instruction')
++                struct.pack_into('>I', data, site, (instruction & 0xfc000003) | (delta & 0x03fffffc))
++            elif kind == 26:
++                struct.pack_into('>I', data, site, (value - (base + site)) & 0xffffffff)
++        return bytes(data)
++
++def main():
++    ap = argparse.ArgumentParser(description=__doc__)
++    ap.add_argument('module', type=Path)
++    ap.add_argument('--output', type=Path, required=True)
++    args = ap.parse_args()
++    module = Module(args.module.read_bytes())
++    if args.output.exists():
++        ap.error('Output already exists; use a new filename')
++    args.output.write_text(json.dumps(module.summary(), indent=2) + '\n')
++    print('Saved read-only analysis:', args.output)
++
++if __name__ == '__main__':
++    main()
+diff --git a/Development/SingleInstance/Tools/build_game_hooks.py b/Development/SingleInstance/Tools/build_game_hooks.py
+new file mode 100644
+index 0000000..7f45778
+--- /dev/null
++++ b/Development/SingleInstance/Tools/build_game_hooks.py
+@@ -0,0 +1,27 @@
++#!/usr/bin/env python3
++"""Compile our game adapters; needs a GCC PowerPC toolchain (tested GCC 12.2).
++Does not read an ISO or original game modules. The module builder is separate.
++"""
++import argparse
++from pathlib import Path
++import subprocess
++
++def main():
++    ap=argparse.ArgumentParser(description=__doc__)
++    ap.add_argument('--prefix',default='powerpc-linux-gnu-')
++    ap.add_argument('--cc',help='Override the GCC executable name')
++    ap.add_argument('--output',required=True,type=Path)
++    args=ap.parse_args();args.output.mkdir(parents=True,exist_ok=True)
++    game=Path(__file__).resolve().parents[1]/'Game'
++    cc=args.cc or args.prefix+'gcc';ld=args.prefix+'ld'
++    flags=['-Os','-mcpu=750','-m32','-mbig-endian','-meabi','-msdata=none','-fno-pic','-fno-common','-ffreestanding',
++           '-fno-builtin','-fno-stack-protector','-fno-unwind-tables','-fno-asynchronous-unwind-tables','-Wall','-Wextra','-Werror']
++    for source,name in [('queue_client.c','client'),('ppc_restore.S','restore')]:
++        subprocess.run([cc,*flags,'-c',str(game/source),'-o',str(args.output/(name+'.o'))],check=True)
++    script=args.output/'module.ld'
++    script.write_text('SECTIONS { .pfq 0 : { *(.text*) *(.rodata*) *(.data*) *(.bss*) *(COMMON) } /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) } }\n')
++    for role in ['tm','other']:
++        subprocess.run([cc,*flags,*(['-DPFQ_PRACTICE'] if role=='tm' else []),'-c',str(game/'preflight_hooks.c'),'-o',str(args.output/(role+'.o'))],check=True)
++        subprocess.run([ld,'-r','-T',str(script),str(args.output/'client.o'),str(args.output/(role+'.o')),str(args.output/'restore.o'),'-o',str(args.output/(role+'-hooks.o'))],check=True)
++    print('Compiled relocatable PowerPC objects:',args.output)
++if __name__=='__main__':main()
+diff --git a/Development/SingleInstance/Tools/build_preflight_modules.py b/Development/SingleInstance/Tools/build_preflight_modules.py
+new file mode 100644
+index 0000000..41735d4
+--- /dev/null
++++ b/Development/SingleInstance/Tools/build_preflight_modules.py
+@@ -0,0 +1,159 @@
++#!/usr/bin/env python3
++"""Build experimental Preflight v1.1 DAT adapters from exact original modules.
++Requires pyelftools and big-endian PowerPC relocatable hook objects. No ISO is
++modified. Output is for development testing with the matching Dolphin fork.
++"""
++import argparse
++import hashlib
++import io
++from pathlib import Path
++import struct
++from analyze_preflight import Module
++from elftools.elf.elffile import ELFFile
++
++HASHES = {
++    'tm.dat': '2a46fda61b0b175c425687bab074b9b06606325bedf3caa5c39e1984007da920',
++    'other.dat': '85757d8ede9fef7b69e522fb4a7e38f2f126758f918f6dae14276043c42ca76b',
++}
++COMMON = {'Slippi_EXI_Transfer': 0x800055f0, 'scene_info': 0x80479d30,
++          'online_mode': 0x804d6640, 'chose_stage': 0x804d666a,
++          'Scene_ExitMinor': 0x801a4b60, 'Scene_SetNextMinor': 0x801a42a0,
++          'Scene_SetNextMajor': 0x801a42e8, 'Scene_CommitMajor': 0x801a42d4}
++
++def add_object(code, data, imports):
++    elf = ELFFile(io.BytesIO(data))
++    if elf.elfclass != 32 or elf.little_endian or elf['e_machine'] != 'EM_PPC' or elf['e_type'] != 'ET_REL':
++        raise ValueError('Expected big-endian ELF32 PowerPC relocatable object')
++    section = elf.get_section_by_name('.pfq')
++    if section is None or section['sh_type'] != 'SHT_PROGBITS':
++        raise ValueError('Missing combined .pfq section')
++    section_index = next(i for i, s in enumerate(elf.iter_sections()) if s.name == '.pfq')
++    base = len(code)
++    if base % 4: raise ValueError('Unaligned module extension')
++    code.extend(section.data())
++    code.extend(b'\0' * (-len(code) % 4))
++    symbols = elf.get_section_by_name('.symtab')
++    def target(symbol):
++        if symbol['st_shndx'] == 'SHN_UNDEF':
++            if symbol.name not in imports: raise ValueError('Unresolved import: ' + symbol.name)
++            return imports[symbol.name]
++        if symbol['st_shndx'] == section_index: return base + symbol['st_value']
++        raise ValueError('Unsupported symbol section: ' + symbol.name)
++    exports = {s.name: target(s) for s in symbols.iter_symbols()
++               if s.name.startswith('PFQ_') and s['st_shndx'] == section_index}
++    relocs = []
++    for section in elf.iter_sections():
++        if section['sh_type'] != 'SHT_RELA': continue
++        if section['sh_info'] != section_index: raise ValueError('Relocation outside .pfq')
++        for r in section.iter_relocations():
++            kind, site = r['r_info_type'], base + r['r_offset']
++            if kind not in (1,4,6,10,26): raise ValueError('Unsupported PowerPC relocation: ' + str(kind))
++            value = target(symbols.get_symbol(r['r_info_sym'])) + r['r_addend']
++            if not (0 <= value <= 0xffffffff): raise ValueError('Relocation target overflow')
++            # RELA addends live in the record. Clear them out of the instruction
++            # field, preserving branch opcode/AA/LK; the HSD loader fills these.
++            if kind in (4,6): struct.pack_into('>H', code, site, 0)
++            elif kind == 10:
++                word = struct.unpack_from('>I', code, site)[0]
++                if word >> 26 != 18: raise ValueError('REL24 is not a branch')
++                struct.pack_into('>I', code, site, word & 0xfc000003)
++            else: struct.pack_into('>I', code, site, 0)
++            relocs.append(dict(site=site, type=kind, target=value))
++    return exports, relocs
++
++def archive(code, relocs, entry):
++    if len(code) % 4 or len({r['site'] for r in relocs}) != len(relocs):
++        raise ValueError('Unaligned extension or duplicate relocations')
++    body = bytearray(code)
++    reloc_offset = len(body)
++    for r in relocs:
++        body.extend(struct.pack('>2I', (r['type'] << 24) | r['site'], r['target']))
++    lookup = len(body)
++    body.extend(struct.pack('>2I', 0, entry))
++    root = len(body)
++    body.extend(struct.pack('>6I', 0, reloc_offset, len(relocs), lookup, 1, reloc_offset))
++    table = struct.pack('>3I', root, root + 4, root + 12) + struct.pack('>2I', root, 0) + b'fns\0'
++    size = 32 + len(body) + len(table)
++    result = struct.pack('>5I', size, len(body), 3, 1, 0) + b'\0' * 12 + body + table
++    checked = Module(result)
++    for base in [0x80010000, 0x80700000, 0x81000000, 0x81700000]: checked.relocated(base)
++    return result
++
++def build(name, original, hook_object):
++    if name not in HASHES or hashlib.sha256(original).hexdigest() != HASHES[name]:
++        raise ValueError('This is not the exact supported Preflight v1.1 ' + name)
++    module = Module(original)
++    code = bytearray(module.code)
++    old_relocs = [dict(r) for r in module.relocs]
++    imports = dict(COMMON)
++    if name == 'tm.dat':
++        imports.update(Original_Entry=0x9054, Original_Frame=0x8d40,
++                       Original_Unranked=0x4884, Original_Direct=0x4588,
++                       root_row_count=0xc494, queue_counter=0xc1c8, exit_to_slippi=0xa1bc,
++                       menu_head=0xc1d8,
++                       singles_context=len(code) + ((ELFFile(io.BytesIO(hook_object)).get_section_by_name('.pfq')['sh_size']+3)&~3) + 6*44)
++    else: imports.update(Original_Entry=0x208, Original_Frame=0, Original_OnExit=0xe8, lr_exit=0x380)
++    exports, new_relocs = add_object(code, hook_object, imports)
++    if name == 'tm.dat':
++        # Keep the original 5 rows, including the dynamically populated CPU
++        # Actions row. Move their references too, before adding a sixth row.
++        old_rows, old_end, new_rows = 0x9e5c, 0x9f38, len(code)
++        code.extend(module.code[old_rows:old_end] + b'\0' * 44)
++        def moved(target):
++            return new_rows + target - old_rows if old_rows <= target < old_end else target
++        for r in old_relocs: r['target'] = moved(r['target'])
++        for r in module.relocs:
++            if old_rows <= r['site'] < old_end:
++                new_relocs.append(dict(site=new_rows+r['site']-old_rows,type=r['type'],target=moved(r['target'])))
++        context = len(code)
++        code.extend(module.code[0xc408:0xc488])
++        for r in module.relocs:
++            if 0xc408 <= r['site'] < 0xc488:
++                new_relocs.append(dict(site=context+r['site']-0xc408,type=r['type'],target=r['target']))
++        rows = len(code)
++        code.extend(b'\0' * (3 * 44))
++        def pointer(site, value):
++            nonlocal new_relocs
++            new_relocs = [r for r in new_relocs if r['site'] != site]
++            new_relocs.append(dict(site=site,type=1,target=value))
++        def string(value):
++            at=len(code); code.extend(value.encode('ascii')+b'\0');code.extend(b'\0' * (-len(code)%4));return at
++        pointer(context, 0xc488)
++        struct.pack_into('>I', code, context+12, 3)
++        pointer(context+20, rows)
++        root_row = new_rows + 5*44
++        pointer(root_row, string('Play singles'))
++        pointer(root_row+12, 0xa04)
++        pointer(root_row+28, context)
++        for i, (label, callback, argument) in enumerate([
++            ('Unranked', 'PFQ_PlaySingles', 1), ('Direct', 'PFQ_PlaySingles', 2), ('Cancel Teams', 'PFQ_CancelTeams', 0)]):
++            at = rows+i*44
++            pointer(at, string(label))
++            pointer(at+12, exports[callback])
++            struct.pack_into('>I', code, at+24, argument)
++            if argument==2: pointer(at+28, 0xc308)
++        # The original practice GOBJ invokes this through a callback pointer.
++        for r in old_relocs:
++            if r['site'] == 0xc28c:
++                if r['target'] != 0x8d40: raise ValueError('Unexpected practice callback')
++                r['target'] = exports['PFQ_Frame']
++    else:
++        for r in old_relocs:
++            if r['target']==0: r['target']=exports['PFQ_Frame']
++            elif r['target']==0xe8: r['target']=exports['PFQ_OnExit']
++    return archive(code, old_relocs+new_relocs, exports['PFQ_Entry'])
++
++def main():
++    ap=argparse.ArgumentParser(description=__doc__)
++    ap.add_argument('--originals',type=Path,required=True)
++    ap.add_argument('--objects',type=Path,required=True)
++    ap.add_argument('--output',type=Path,required=True)
++    args=ap.parse_args()
++    if args.output.exists(): ap.error('Choose a new output folder; existing files are preserved')
++    prepared={name:build(name,(args.originals/name).read_bytes(),(args.objects/(name[:-4]+'-hooks.o')).read_bytes()) for name in HASHES}
++    args.output.mkdir(parents=True)
++    for name, data in prepared.items():
++        (args.output/name).write_bytes(data)
++        print(name,len(data),hashlib.sha256(data).hexdigest())
++    print('Experimental module adapters only. No ISO or Windows executable was produced.')
++if __name__=='__main__': main()
+diff --git a/Development/SingleInstance/Tools/make_module_delta.py b/Development/SingleInstance/Tools/make_module_delta.py
+new file mode 100644
+index 0000000..56f28e4
+--- /dev/null
++++ b/Development/SingleInstance/Tools/make_module_delta.py
+@@ -0,0 +1,46 @@
++#!/usr/bin/env python3
++"""Create a checksum-bound COPY/DATA recipe. Does not bundle original modules."""
++import argparse, base64, difflib, hashlib, json
++from pathlib import Path
++
++def recipe(original, modified):
++    # Prefer original spans for both code and unchanged relocation tables.
++    matcher=difflib.SequenceMatcher(None,original,modified,autojunk=True)
++    operations=[];cursor=0
++    for a,b,size in matcher.get_matching_blocks():
++        if b>cursor:operations.append({'Data':base64.b64encode(modified[cursor:b]).decode('ascii')})
++        if size:operations.append({'Copy':a,'Length':size})
++        cursor=b+size
++    return {'OriginalBytes':len(original),'OriginalSHA256':hashlib.sha256(original).hexdigest(),
++            'OutputBytes':len(modified),'OutputSHA256':hashlib.sha256(modified).hexdigest(),
++            'Operations':operations}
++
++def apply(original, patch):
++    if len(original)!=patch['OriginalBytes'] or hashlib.sha256(original).hexdigest()!=patch['OriginalSHA256']:
++        raise ValueError('Original does not match')
++    out=bytearray()
++    for op in patch['Operations']:
++        if 'Copy' in op:
++            start,size=op['Copy'],op['Length']
++            if start<0 or size<0 or start+size>len(original):raise ValueError('Invalid copy range')
++            out.extend(original[start:start+size])
++        else:out.extend(base64.b64decode(op['Data'],validate=True))
++    if len(out)!=patch['OutputBytes'] or hashlib.sha256(out).hexdigest()!=patch['OutputSHA256']:
++        raise ValueError('Patched result does not match')
++    return bytes(out)
++
++def main():
++    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('originals',type=Path);ap.add_argument('modified',type=Path);ap.add_argument('output',type=Path)
++    args=ap.parse_args()
++    files={}
++    for name in ['tm.dat','other.dat']:
++        original=(args.originals/name).read_bytes();modified=(args.modified/name).read_bytes()
++        patch=recipe(original,modified)
++        if apply(original,patch)!=modified:raise ValueError('Recipe roundtrip failed')
++        files[name]=patch
++    doc={'Format':'Preflight parallel queue experimental patch 1','DolSHA256':'f604e1399f2dc88e2fbbaa2b3441867ca34d00b99b82e16bee4e4ef108604805',
++         'CodesSHA256':'1fdf6c7f11268e39d6bd68124b1b287008869f3e941851eb19b23a34dd54701d','Files':files}
++    if args.output.exists():raise ValueError('Output exists')
++    args.output.write_text(json.dumps(doc,separators=(',',':'))+'\n')
++    print('Roundtrip verified:',args.output)
++if __name__=='__main__':main()
+diff --git a/Development/SingleInstance/Tools/test_ppc_hooks.py b/Development/SingleInstance/Tools/test_ppc_hooks.py
+new file mode 100644
+index 0000000..7378c98
+--- /dev/null
++++ b/Development/SingleInstance/Tools/test_ppc_hooks.py
+@@ -0,0 +1,162 @@
++#!/usr/bin/env python3
++"""Execute compiled big-endian PowerPC adapters with mocked game/EXI services.
++This is an adapter regression test, not a Dolphin or live-match test.
++"""
++import argparse
++import struct
++import sys
++from pathlib import Path
++from elftools.elf.elffile import ELFFile
++from unicorn import Uc, UC_ARCH_PPC, UC_MODE_32, UC_MODE_BIG_ENDIAN, UC_HOOK_CODE
++from unicorn import ppc_const as PPC
++from analyze_preflight import Module
++from build_preflight_modules import build, HASHES
++
++checks=0
++def check(value, why):
++    global checks
++    if not value: raise AssertionError(why)
++    checks+=1
++
++def w32(value): return struct.pack('>I', value)
++
++class Machine:
++    def __init__(self, name, original, obj, stock=False):
++        self.name=name;self.base=0x81000000
++        self.module=Module(build(name,original,obj))
++        self.u=Uc(UC_ARCH_PPC,UC_MODE_32|UC_MODE_BIG_ENDIAN)
++        self.u.mem_map(0x80000000,0x1800000)
++        self.u.mem_write(self.base,self.module.relocated(self.base))
++        self.stock=stock;self.foreground=3;self.parked=False;self.connected=False
++        self.busy=False;self.failed=False;self.token=0;self.tx=b'';self.rx=b''
++        self.calls=[];self.actions=[];self.old_frames=0;self.selected=[]
++        self.symbols={}
++        with open(obj_path(name),'rb') as f:
++            elf=ELFFile(f)
++            for s in elf.get_section_by_name('.symtab').iter_symbols():
++                if s.name.startswith('PFQ_') and isinstance(s['st_shndx'],int):
++                    self.symbols[s.name]=self.base+len(Module(original).code)+s['st_value']
++        self.u.hook_add(UC_HOOK_CODE,self.hook)
++        self.scene(0x1c,2) if name=='tm.dat' else self.scene(8,0)
++        self.write(0x804d6640,b'\x03')
++    def write(self,at,data): self.u.mem_write(at,data)
++    def read32(self,at): return struct.unpack('>I',self.u.mem_read(at,4))[0]
++    def scene(self,major,minor):self.write(0x80479d30,bytes([major,0,0,minor]))
++    def ret(self):self.u.reg_write(PPC.UC_PPC_REG_PC,self.u.reg_read(PPC.UC_PPC_REG_LR))
++    def control(self,tx):
++        op=tx[6];generation=int.from_bytes(tx[9:13],'big');result=0
++        self.calls.append(op)
++        if op==1:
++            if self.parked:result=6
++            elif self.foreground!=3:result=7
++            elif self.busy:result=8
++            else:self.parked=True;self.foreground=255;self.token+=1
++        if op in (3,4):
++            if generation!=self.token or not generation:result=4
++            elif not self.parked:result=5
++            elif op==3 and self.busy:result=8
++            elif op==3 and not self.connected:result=9
++            else:
++                self.parked=False;self.token+=1
++                if op==3:self.foreground=3
++        flags=(1|(4 if self.failed else 2 if self.connected else 0)) if self.parked else 0
++        return b'PFDQ'+bytes([1,result,flags,self.foreground])+w32(self.token)+w32(15)
++    def hook(self,u,at,size,userdata):
++        if at==0x817f0000:u.emu_stop();return
++        r3=u.reg_read(PPC.UC_PPC_REG_3)
++        if at==0x800055f0:
++            length=u.reg_read(PPC.UC_PPC_REG_4);write=u.reg_read(PPC.UC_PPC_REG_5)
++            if write:
++                self.tx=bytes(u.mem_read(r3,length))
++                if self.tx[:1]==b'\xe6':
++                    check(len(self.tx)==13 and self.tx[1:6]==b'PFDQ\x01','compiled PPC sends correct EXI wire bytes')
++                    self.rx=b'\0'*16 if self.stock else self.control(self.tx)
++                elif self.tx==b'\xba':
++                    self.actions.append('cleanup');self.foreground=255
++            else:
++                check(length==16,'PPC reads the complete capability/status reply')
++                u.mem_write(r3,self.rx)
++            self.ret();return
++        originals=({'entry':0x9054,'frame':0x8d40,'unranked':0x4884,'direct':0x4588}
++                   if self.name=='tm.dat' else {'entry':0x208,'frame':0,'exit':0xe8})
++        for action,offset in originals.items():
++            if at==self.base+offset:
++                self.actions.append(action)
++                if action=='entry' and self.name=='tm.dat':
++                    self.write(self.base+0xc494,w32(5));self.write(self.base+0xc1d8,w32(self.base+0xc208))
++                if action=='frame':self.old_frames+=1
++                if action in ('unranked','direct'):
++                    self.selected.append((action,r3));self.foreground=1 if action=='unranked' else 2
++                self.ret();return
++        scene_calls={0x801a4b60:'exit_minor',0x801a42a0:'next_minor',0x801a42e8:'next_major',0x801a42d4:'commit_major'}
++        if at in scene_calls:
++            self.actions.append((scene_calls[at],r3));self.ret()
++    def run(self,symbol,arg=0):
++        self.u.reg_write(PPC.UC_PPC_REG_1,0x817e0000)
++        self.u.reg_write(PPC.UC_PPC_REG_2,0x804df9e0)
++        self.u.reg_write(PPC.UC_PPC_REG_13,0x804db6a0)
++        self.u.reg_write(PPC.UC_PPC_REG_3,arg)
++        self.u.reg_write(PPC.UC_PPC_REG_LR,0x817f0000)
++        # Verify callee-saved registers and the stack on real PPC instructions.
++        for r in range(14,32):self.u.reg_write(getattr(PPC,'UC_PPC_REG_'+str(r)),0x12340000+r)
++        self.u.emu_start(self.symbols[symbol],0x817f0004,count=50000)
++        check(self.u.reg_read(PPC.UC_PPC_REG_PC)==0x817f0000,'hook returned within instruction budget')
++        check(self.u.reg_read(PPC.UC_PPC_REG_1)==0x817e0000,'PowerPC stack restored')
++        check(all(self.u.reg_read(getattr(PPC,'UC_PPC_REG_'+str(r)))==0x12340000+r for r in range(14,32)), 'callee-saved GPRs preserved')
++    def row(self,index):
++        root=self.read32(self.base+0xc49c)
++        context=self.read32(root+5*44+28)
++        return self.read32(context+20)+index*44
++
++def obj_path(name):return str(args.objects/(name[:-4]+'-hooks.o'))
++
++def machine(name,stock=False):return Machine(name,(args.originals/name).read_bytes(),(args.objects/(name[:-4]+'-hooks.o')).read_bytes(),stock)
++
++def main():
++    for name in HASHES:
++        raw=(args.originals/name).read_bytes();obj=Path(obj_path(name)).read_bytes()
++        try:build(name,raw[:-1]+bytes([raw[-1]^1]),obj);raise AssertionError('accepted changed original')
++        except ValueError:check(True,'unknown original cannot be patched')
++    m=machine('tm.dat',stock=True);m.run('PFQ_Entry')
++    check(m.read32(m.base+0xc494)==5,'stock host cannot expose new menu')
++    m=machine('tm.dat');m.run('PFQ_Entry')
++    check(m.read32(m.base+0xc494)==6,'capable host exposes sixth menu row')
++    context=m.read32(m.read32(m.base+0xc49c)+5*44+28)
++    check(m.read32(m.base+0xc1d8)==context and m.read32(context)==m.base+0xc208,'new submenu registers in Preflight update/draw chain')
++    root=m.read32(m.base+0xc49c)
++    check(bytes(m.u.mem_read(m.read32(root+5*44),13))==b'Play singles\0','new label and root pointer relocate correctly')
++    m.run('PFQ_PlaySingles',m.row(0))
++    check(m.parked and m.foreground==1 and m.calls.count(1)==1,'Unranked starts after Teams parking')
++    check(m.selected[-1][0]=='unranked','existing Unranked callback reused')
++    m.run('PFQ_PlaySingles',m.row(1))
++    check(m.parked and m.foreground==2 and m.calls.count(1)==1,'Direct reuses existing parked Teams')
++    m.run('PFQ_Frame',0x81700000)
++    check(m.old_frames==1,'ordinary practice polling preserved while Teams waits')
++    m.connected=True;m.run('PFQ_Frame',0x81700000)
++    check(m.old_frames==1 and m.parked,'ready Teams leaves practice without swapping live transport')
++    check(m.read32(m.base+0xc1c8)==0 and m.u.mem_read(m.base+0xa1bc,1)==b'\x01','original practice exit path requested')
++    check(m.u.mem_read(0x804d6640,1)==b'\x03','Teams mode selected before exiting practice')
++    m=machine('tm.dat');m.foreground=1;m.run('PFQ_Entry');m.run('PFQ_PlaySingles',m.row(0))
++    check(not m.parked and not m.selected,'without a Teams search singles callback cannot silently replace it')
++    m=machine('tm.dat');m.run('PFQ_Entry');m.run('PFQ_PlaySingles',m.row(0));m.run('PFQ_CancelTeams',m.row(2))
++    check(not m.parked and m.foreground==1,'cancel Teams leaves singles untouched')
++    m=machine('other.dat');m.parked=True;m.connected=True;m.token=11;m.foreground=1
++    m.write(0x804d6640,b'\x01');m.run('PFQ_Entry');m.run('PFQ_Frame',0x81700000)
++    check(m.parked and 3 not in m.calls,'singles CSS restarts before activation')
++    m.run('PFQ_OnExit')
++    check(('next_minor',0) in m.actions and ('next_major',8) in m.actions and ('commit_major',8) in m.actions,'CSS exit requests a fresh VS CSS after ordinary cleanup')
++    m.run('PFQ_Entry');m.busy=True;m.run('PFQ_Frame',0x81700000)
++    check(m.parked,'busy report/replay cannot activate Teams')
++    cleanups=m.actions.count('cleanup');m.run('PFQ_Frame',0x81700000)
++    check(m.actions.count('cleanup')==cleanups,'waiting for report/replay does not repeatedly clean up')
++    m.busy=False;m.run('PFQ_Frame',0x81700000)
++    check(not m.parked and m.foreground==3,'Teams activates once the lifecycle barrier releases')
++    check(m.u.mem_read(0x804d666a,1)==b'\x01','existing chose-stage flag enables ready Teams selections')
++    m.run('PFQ_Frame',0x81700000)
++    check(m.old_frames==1,'normal L+R handler resumes after handoff')
++    print(checks,'compiled PowerPC adapter/relocation/ABI checks passed. Mock game services only; no Dolphin or online match ran.')
++
++if __name__=='__main__':
++    ap=argparse.ArgumentParser(description=__doc__)
++    ap.add_argument('--originals',type=Path,required=True);ap.add_argument('--objects',type=Path,required=True)
++    args=ap.parse_args();main()
+diff --git a/Source/Core/Common/Version.cpp b/Source/Core/Common/Version.cpp
+index 7f35694..1d93fe6 100644
+--- a/Source/Core/Common/Version.cpp
++++ b/Source/Core/Common/Version.cpp
+@@ -25,7 +25,7 @@
+ #ifdef IS_PLAYBACK
+ const std::string scm_rev_str = "Faster Melee - Slippi (" SLIPPI_REV_STR ") - Playback" DEBUGFAST_STR;
+ #else
+-const std::string scm_rev_str = "Faster Melee - Slippi (" SLIPPI_REV_STR ")" DEBUGFAST_STR;
++const std::string scm_rev_str = "Faster Melee - Slippi (" SLIPPI_REV_STR ") [Teams Priority test]" DEBUGFAST_STR;
+ #endif
+ const std::string scm_slippi_semver_str = SLIPPI_REV_STR;
+ 
+diff --git a/Source/Core/Core/HW/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI_DeviceSlippi.cpp
+index 4e39919..e4529e1 100644
+--- a/Source/Core/Core/HW/EXI_DeviceSlippi.cpp
++++ b/Source/Core/Core/HW/EXI_DeviceSlippi.cpp
+@@ -166,11 +166,11 @@ CEXISlippi::CEXISlippi()
+ 	m_slippiserver = SlippiSpectateServer::getInstance();
+ 	user = std::make_unique<SlippiUser>(slprs_exi_device_ptr);
+ 	g_playbackStatus = std::make_unique<SlippiPlaybackStatus>();
+-	matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get());
++	matchmaking = createForegroundMatchmaking();
+ 	gameFileLoader = std::make_unique<SlippiGameFileLoader>();
+ 	g_replayComm = std::make_unique<SlippiReplayComm>();
+-	directCodes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::DIRECT);
+-	teamsCodes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::TEAMS);
++	directCodes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::DIRECT, user->GetRustAccess());
++	teamsCodes = std::make_unique<SlippiDirectCodes>(slprs_exi_device_ptr, SlippiDirectCodes::TEAMS, user->GetRustAccess());
+ 
+ 	generator = std::default_random_engine(Common::Timer::GetTimeMs());
+ 
+@@ -228,9 +228,16 @@ CEXISlippi::~CEXISlippi()
+ 	{
+ 		ERROR_LOG(SLIPPI_ONLINE, "Exit during in-progress ranked game: %s", activeMatchId.c_str());
+ 
+-		slprs_exi_device_report_match_status(slprs_exi_device_ptr, activeMatchId.c_str(), "abandoned", false);
++		rustCall([&] { return slprs_exi_device_report_match_status(slprs_exi_device_ptr, activeMatchId.c_str(), "abandoned", false); });
+ 	}
++	CancelTeams();
+ 	handleConnectionCleanup();
++	// Cleanup workers can still use the Rust device/user. Join them before
++	// destroying that device or deinitializing ENet.
++	for (auto& cleanup : m_connectionCleanup)
++		cleanup.wait();
++	m_connectionCleanup.clear();
++	matchmaking.reset();
+ 
+ 	localSelections.Reset();
+ 
+@@ -238,7 +245,7 @@ CEXISlippi::~CEXISlippi()
+ 	g_playbackStatus->resetPlayback();
+ 
+ 	// Instruct the Rust EXI device to shut down/drop everything.
+-	slprs_exi_device_destroy(slprs_exi_device_ptr);
++	rustCall([&] { return slprs_exi_device_destroy(slprs_exi_device_ptr); });
+ 
+ 	// TODO: ENET shutdown should maybe be done at app shutdown instead.
+ 	// Right now this might be problematic in the case where someone starts a netplay client
+@@ -318,7 +325,7 @@ std::vector<u8> CEXISlippi::generateMetadata()
+ 	// Add game start time
+ 	u8 dateTimeStrLength = sizeof "2011-10-08T07:07:09Z";
+ 	std::vector<char> dateTimeBuf(dateTimeStrLength);
+-	strftime(&dateTimeBuf[0], dateTimeStrLength, "%FT%TZ", gmtime(&gameStartTime));
++	strftime(&dateTimeBuf[0], dateTimeStrLength, "%FT%TZ", gmtime(&replayStartTime));
+ 	dateTimeBuf.pop_back(); // Removes the \0 from the back of string
+ 	metadata.insert(metadata.end(), {'U', 7, 's', 't', 'a', 'r', 't', 'A', 't', 'S', 'U', (u8)dateTimeBuf.size()});
+ 	metadata.insert(metadata.end(), dateTimeBuf.begin(), dateTimeBuf.end());
+@@ -425,7 +432,20 @@ void CEXISlippi::writeToFileAsync(u8 *payload, u32 length, std::string fileOptio
+ 	auto writeMsg = std::make_unique<WriteMessage>();
+ 	writeMsg->data = payloadData;
+ 	writeMsg->operation = fileOption;
++	if (fileOption == "create")
++	{
++		writeMsg->startTime = gameStartTime;
++		if (slippi_netplay)
++		{
++			for (size_t i = 0; i < recentMmResult.players.size(); ++i)
++			{
++				writeMsg->playerNames[static_cast<u8>(i)] = recentMmResult.players[i].displayName;
++				writeMsg->connectCodes[static_cast<u8>(i)] = recentMmResult.players[i].connectCode;
++			}
++		}
++	}
+ 
++	m_sessionBarrier.ReplayQueued();
+ 	fileWriteQueue.Push(std::move(writeMsg));
+ }
+ 
+@@ -438,6 +458,7 @@ void CEXISlippi::FileWriteThread(void)
+ 		{
+ 			writeToFile(std::move(fileWriteQueue.Front()));
+ 			fileWriteQueue.Pop();
++			m_sessionBarrier.ReplayWritten();
+ 
+ 			Common::SleepCurrentThread(0);
+ 		}
+@@ -461,7 +482,11 @@ void CEXISlippi::writeToFile(std::unique_ptr<WriteMessage> msg)
+ 	std::vector<u8> dataToWrite;
+ 	if (fileOption == "create")
+ 	{
+-		// If the game sends over option 1 that means a file should be created
++		// Metadata belongs to this replay, even if a different session is now
++		// preparing in the CPU thread. Never dereference its matchmaking here.
++		replayStartTime = msg->startTime;
++		slippi_names = std::move(msg->playerNames);
++		slippi_connect_codes = std::move(msg->connectCodes);
+ 		createNewFile();
+ 
+ 		// Start ubjson file and prepare the "raw" element that game
+@@ -479,17 +504,6 @@ void CEXISlippi::writeToFile(std::unique_ptr<WriteMessage> msg)
+ 		// Reset lastFrame
+ 		lastFrame = Slippi::GAME_FIRST_FRAME;
+ 
+-		// Get display names and connection codes from slippi netplay client
+-		if (slippi_netplay)
+-		{
+-			auto playerInfo = matchmaking->GetPlayerInfo();
+-
+-			for (int i = 0; i < playerInfo.size(); i++)
+-			{
+-				slippi_names[i] = playerInfo[i].displayName;
+-				slippi_connect_codes[i] = playerInfo[i].connectCode;
+-			}
+-		}
+ 	}
+ 
+ 	// If no file, do nothing
+@@ -585,7 +599,7 @@ void CEXISlippi::createNewFile()
+ 		// Append YYYY-MM to the directory path
+ 		uint8_t yearMonthStrLength = sizeof "2020-06";
+ 		std::vector<char> yearMonthBuf(yearMonthStrLength);
+-		strftime(&yearMonthBuf[0], yearMonthStrLength, "%Y-%m", localtime(&gameStartTime));
++		strftime(&yearMonthBuf[0], yearMonthStrLength, "%Y-%m", localtime(&replayStartTime));
+ 
+ 		std::string yearMonth(&yearMonthBuf[0]);
+ 		dirpath.append(yearMonth);
+@@ -620,7 +634,7 @@ std::string CEXISlippi::generateFileName()
+ 	// Add game start time
+ 	u8 dateTimeStrLength = sizeof "20171015T095717";
+ 	std::vector<char> dateTimeBuf(dateTimeStrLength);
+-	strftime(&dateTimeBuf[0], dateTimeStrLength, "%Y%m%dT%H%M%S", localtime(&gameStartTime));
++	strftime(&dateTimeBuf[0], dateTimeStrLength, "%Y%m%dT%H%M%S", localtime(&replayStartTime));
+ 
+ 	std::string str(&dateTimeBuf[0]);
+ 	return StringFromFormat("Game_%s.slp", str.c_str());
+@@ -1279,8 +1293,23 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
+ 
+ 		// Reset character selections such that they are cleared for next game
+ 		localSelections.Reset();
++		m_restoredTeamsSelections = false;
+ 		if (slippi_netplay)
++		{
++			m_sessionBarrier.BeginOnlineGame();
+ 			slippi_netplay->StartSlippiGame();
++		}
++	}
++
++	// Successful peer connections, rather than a server assignment, give Teams
++	// priority. Use the ordinary disconnect/game-end path; the game-side scene
++	// controller still must clean up singles and request an explicit handoff.
++	// Ranked and Teams games never pass this policy.
++	if (m_pendingTeams && SlippiQueueControl::ShouldYieldToTeams(
++	        static_cast<SlippiQueueControl::Mode>(lastSearch.mode), !isDisconnected(), TeamsReady()))
++	{
++		slippi_netplay->ForceDisconnect();
++		INFO_LOG(SLIPPI_ONLINE, "[Parallel queue] Teams peers connected; ending singles before handoff");
+ 	}
+ 
+ 	if (isDisconnected())
+@@ -1408,7 +1437,7 @@ void CEXISlippi::handlePoorMatchPerformance(s32 frame)
+ 		// disconnect-detection path end the game naturally (next handleOnlineInputs sees
+ 		// isDisconnected()), same as a real disconnect. The reason rides the disconnect to the
+ 		// peer so both clients surface the OSD message from the shared disconnect path below.
+-		slprs_exi_device_report_match_status(slprs_exi_device_ptr, recentMmResult.id.c_str(), "poor_performance", true);
++		rustCall([&] { return slprs_exi_device_report_match_status(slprs_exi_device_ptr, recentMmResult.id.c_str(), "poor_performance", true); });
+ 		slippi_netplay->ForceDisconnect(SlippiNetplayClient::SlippiDisconnectReason::POOR_PERFORMANCE);
+ 		ERROR_LOG(SLIPPI_ONLINE, "Match terminated due to poor performance. %d/%d", perfDebt, terminateThreshold);
+ 	}
+@@ -1917,6 +1946,13 @@ void CEXISlippi::startFindMatch(u8 *payload)
+ {
+ 	SlippiMatchmaking::MatchSearchSettings search;
+ 	search.mode = (SlippiMatchmaking::OnlinePlayMode)payload[0];
++	if (m_pendingTeams && !SlippiQueueControl::IsSinglesMode(
++	        static_cast<SlippiQueueControl::Mode>(search.mode)))
++	{
++		forcedError = "With Teams queued, choose Direct or Unranked for singles";
++		return;
++	}
++
+ 
+ 	std::string shiftJisCode;
+ 	shiftJisCode.insert(shiftJisCode.begin(), &payload[1], &payload[1] + 18);
+@@ -2164,6 +2200,8 @@ void CEXISlippi::prepareOnlineMatchState()
+ #else
+ 			slippi_netplay = matchmaking->GetNetplayClient();
+ #endif
++			if (slippi_netplay)
++				slippi_netplay->ActivateForGameplay();
+ 
+ 			// This happens on the initial connection to a player. The matchmaking object is ephemeral, it
+ 			// gets re-created when a connection is terminated, that said, it can still be useful to know
+@@ -2241,7 +2279,7 @@ void CEXISlippi::prepareOnlineMatchState()
+ 		// Here we are connected, check to see if we should init play session
+ 		if (!isPlaySessionActive)
+ 		{
+-			slprs_exi_device_start_new_reporter_session(slprs_exi_device_ptr);
++			rustCall([&] { return slprs_exi_device_start_new_reporter_session(slprs_exi_device_ptr); });
+ 			isPlaySessionActive = true;
+ 		}
+ 	}
+@@ -2760,6 +2798,12 @@ u16 CEXISlippi::getRandomStage()
+ 
+ void CEXISlippi::setMatchSelections(u8 *payload)
+ {
++	// A fresh Slippi CSS may still hold the singles character/color. Preserve
++	// the parked Teams choices through its first game setup; later games use
++	// the normal selection path again. Cleanup/cancellation also releases this.
++	if (m_restoredTeamsSelections)
++		return;
++
+ 	SlippiPlayerSelections s;
+ 
+ 	s.teamId = payload[0];
+@@ -3055,22 +3099,149 @@ void doConnectionCleanup(std::unique_ptr<SlippiMatchmaking> mm, std::unique_ptr<
+ 		nc.reset();
+ }
+ 
++std::unique_ptr<SlippiMatchmaking> CEXISlippi::createForegroundMatchmaking()
++{
++	// Peer construction is not gameplay activation. The foreground match-state
++	// path publishes the active client only when it takes ownership of it.
++	return std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get(), false, !m_pendingTeams);
++}
++
++void CEXISlippi::queueConnectionCleanup(std::unique_ptr<SlippiMatchmaking> mm,
++                                        std::unique_ptr<SlippiNetplayClient> client)
++{
++	try
++	{
++		for (auto it = m_connectionCleanup.begin(); it != m_connectionCleanup.end();)
++		{
++			if (it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
++				it = m_connectionCleanup.erase(it);
++			else
++				++it;
++		}
++		m_connectionCleanup.emplace_back(
++		    std::async(std::launch::async, doConnectionCleanup, std::move(mm), std::move(client)));
++	}
++	catch (const std::exception& error)
++	{
++		// If a worker cannot be started/stored, argument/future destruction still
++		// owns and finishes cleanup here. No detached worker may outlive the device.
++		WARN_LOG(SLIPPI_ONLINE, "Connection cleanup completed synchronously: %s", error.what());
++	}
++}
++
++SlippiQueueControl::Mode CEXISlippi::ForegroundMode() const
++{
++	if (!matchmaking || matchmaking->GetMatchmakeState() == SlippiMatchmaking::IDLE)
++		return SlippiQueueControl::Mode::None;
++	return static_cast<SlippiQueueControl::Mode>(lastSearch.mode);
++}
++
++bool CEXISlippi::ForegroundBusy() const
++{
++	return !m_sessionBarrier.Idle() || slippi_netplay || isPlaySessionActive ||
++	       (matchmaking && matchmaking->IsSearching());
++}
++
++bool CEXISlippi::CanParkTeams() const
++{
++	return matchmaking && lastSearch.mode == SlippiMatchmaking::TEAMS &&
++	       matchmaking->IsSearching() && !slippi_netplay && !isPlaySessionActive &&
++	       m_sessionBarrier.OnlineIdle() && forcedError.empty();
++}
++
++bool CEXISlippi::HasTeams() const { return m_pendingTeams != nullptr; }
++bool CEXISlippi::TeamsReady() const
++{
++	return m_pendingTeams && m_pendingTeams->matchmaking->HasConnectedPeers();
++}
++bool CEXISlippi::TeamsFailed() const
++{
++	if (!m_pendingTeams)
++		return false;
++	const auto state = m_pendingTeams->matchmaking->GetMatchmakeState();
++	return state == SlippiMatchmaking::ERROR_ENCOUNTERED ||
++	       (state == SlippiMatchmaking::CONNECTION_SUCCESS && !TeamsReady());
++}
++
++void CEXISlippi::ParkTeams()
++{
++	// Allocate all new state before moving ownership of the existing search.
++	auto fresh = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get(), false, false);
++	auto pending = std::make_unique<PendingTeams>();
++	pending->search = lastSearch;
++	pending->selections = localSelections;
++	pending->allowedStages = allowedStages;
++	pending->stagePool = stagePool;
++	pending->matchmaking = std::move(matchmaking);
++	m_pendingTeams = std::move(pending);
++	matchmaking = std::move(fresh);
++	localSelections.Reset();
++	stagePool.clear();
++	forcedError.clear();
++	overwrite_selections.clear();
++	isPlaySessionActive = false;
++	lastSearch = SlippiMatchmaking::MatchSearchSettings();
++	recentMmResult = SlippiMatchmaking::MatchmakeResult();
++	INFO_LOG(SLIPPI_ONLINE, "[Parallel queue] Teams search parked; foreground available for singles");
++}
++
++void CEXISlippi::ActivateTeams()
++{
++	// The game must end singles and issue normal foreground cleanup first.
++	// Never swap transports underneath live singles input/rollback processing.
++	queueConnectionCleanup(std::move(matchmaking), std::move(slippi_netplay));
++	matchmaking = std::move(m_pendingTeams->matchmaking);
++	lastSearch = std::move(m_pendingTeams->search);
++	localSelections = m_pendingTeams->selections;
++	allowedStages = std::move(m_pendingTeams->allowedStages);
++	stagePool = std::move(m_pendingTeams->stagePool);
++	m_pendingTeams.reset();
++	m_restoredTeamsSelections = true;
++	forcedError.clear();
++	overwrite_selections.clear();
++	isPlaySessionActive = false;
++	recentMmResult = SlippiMatchmaking::MatchmakeResult();
++	activeSavestates.clear();
++	availableSavestates.clear();
++	INFO_LOG(SLIPPI_ONLINE, "[Parallel queue] Teams restored; waiting for game lobby setup");
++}
++
++void CEXISlippi::CancelTeams()
++{
++	if (!m_pendingTeams)
++		return;
++	queueConnectionCleanup(std::move(m_pendingTeams->matchmaking), nullptr);
++	m_pendingTeams.reset();
++}
++
++void CEXISlippi::handleQueueControl(const u8* payload, size_t length)
++{
++	SlippiQueueControl::Reply reply;
++	try { reply = m_queueControl.Handle(payload, length, *this); }
++	catch (const std::exception& error)
++	{
++		ERROR_LOG(SLIPPI_ONLINE, "[Parallel queue] Control failed: %s", error.what());
++		reply = m_queueControl.Respond(SlippiQueueControl::Result::InternalError, *this);
++	}
++	m_read_queue.assign(reply.begin(), reply.end());
++}
++
+ void CEXISlippi::handleConnectionCleanup()
+ {
+ 	ERROR_LOG(SLIPPI_ONLINE, "Connection cleanup started...");
+ 
+ 	// Handle destructors in a separate thread to not block the main thread
+-	std::thread cleanup(doConnectionCleanup, std::move(matchmaking), std::move(slippi_netplay));
+-	cleanup.detach();
++	queueConnectionCleanup(std::move(matchmaking), std::move(slippi_netplay));
+ 
+ 	// Reset matchmaking
+-	matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get());
++	matchmaking = createForegroundMatchmaking();
+ 
+ 	// Disconnect netplay client
+ 	slippi_netplay = nullptr;
+ 
+ 	// Clear character selections
+ 	localSelections.Reset();
++	m_restoredTeamsSelections = false;
+ 
+ 	// Reset random stage pool
+ 	stagePool.clear();
+@@ -3170,8 +3341,9 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
+ 	}
+ 
+ #ifndef LOCAL_TESTING
+-	slprs_exi_device_log_game_report(slprs_exi_device_ptr, gameReport);
++	rustCall([&] { return slprs_exi_device_log_game_report(slprs_exi_device_ptr, gameReport); });
+ #endif
++	m_sessionBarrier.ReportFinished();
+ }
+ 
+ void CEXISlippi::prepareDelayResponse()
+@@ -3274,7 +3446,7 @@ void CEXISlippi::handleCompleteSet(const SlippiExiTypes::ReportSetCompletionQuer
+ 		auto userInfo = user->GetUserInfo();
+ 
+ 		auto status = query.endMode == 0 ? "normal_completion" : "abnormal_completion";
+-		slprs_exi_device_report_match_status(slprs_exi_device_ptr, lastMatchId.c_str(), status, true);
++		rustCall([&] { return slprs_exi_device_report_match_status(slprs_exi_device_ptr, lastMatchId.c_str(), status, true); });
+ 	}
+ }
+ 
+@@ -3298,7 +3470,7 @@ void CEXISlippi::handleMatchStatusUpdate(const SlippiExiTypes::ReportMatchStatus
+ 	INFO_LOG(SLIPPI_ONLINE, "Reporting match status update: %s, Status: %s", lastMatchId.c_str(), statusString.c_str());
+ 
+ 	// Report asynchronously when called from the game
+-	slprs_exi_device_report_match_status(slprs_exi_device_ptr, lastMatchId.c_str(), statusString.c_str(), true);
++	rustCall([&] { return slprs_exi_device_report_match_status(slprs_exi_device_ptr, lastMatchId.c_str(), statusString.c_str(), true); });
+ }
+ 
+ void CEXISlippi::handleGetPlayerSettings()
+@@ -3345,7 +3517,7 @@ void CEXISlippi::handleGetPlayerSettings()
+ 
+ void CEXISlippi::handleGetRank()
+ {
+-	RustRankInfo rank_info = slprs_get_rank_info(slprs_exi_device_ptr);
++	RustRankInfo rank_info = rustCall([&] { return slprs_get_rank_info(slprs_exi_device_ptr); });
+ 	m_read_queue.clear();
+ 
+ 	// Determine rank info visibility
+@@ -3395,7 +3567,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+ 		m_slippiserver->startGame();
+ 		m_slippiserver->write(&memPtr[0], receiveCommandsLen + 1);
+ 
+-		slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[0], receiveCommandsLen + 1);
++		rustCall([&] { return slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[0], receiveCommandsLen + 1); });
+ 	}
+ 
+ 	if (byte == CMD_MENU_FRAME)
+@@ -3423,13 +3595,19 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+ 		}
+ 
+ 		u32 payloadLen = payloadSizes[byte];
++		if (byte == CMD_QUEUE_CONTROL && _uSize - bufLoc < payloadLen + 1)
++		{
++			handleQueueControl(nullptr, 0);
++			return;
++		}
+ 		switch (byte)
+ 		{
+ 		case CMD_RECEIVE_GAME_END:
++			m_sessionBarrier.EndGame();
+ 			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "close");
+ 			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
+ 			m_slippiserver->endGame();
+-			slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1);
++			rustCall([&] { return slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1); });
+ 			break;
+ 		case CMD_PREPARE_REPLAY:
+ 			// log.open("log.txt");
+@@ -3442,7 +3620,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+ 			g_needInputForFrame = true;
+ 			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "");
+ 			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
+-			slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1);
++			rustCall([&] { return slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1); });
+ 			break;
+ 		case CMD_IS_STOCK_STEAL:
+ 			prepareIsStockSteal(&memPtr[bufLoc + 1]);
+@@ -3463,6 +3641,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+ 		case CMD_LOAD_SAVESTATE:
+ 			handleLoadSavestate(&memPtr[bufLoc + 1]);
+ 			break;
++		case CMD_QUEUE_CONTROL:
++			handleQueueControl(&memPtr[bufLoc + 1], payloadLen);
++			break;
+ 		case CMD_GET_MATCH_STATE:
+ 			prepareOnlineMatchState();
+ 			break;
+@@ -3547,16 +3728,16 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+ 		case CMD_PLAY_MUSIC:
+ 		{
+ 			auto args = SlippiExiTypes::Convert<SlippiExiTypes::PlayMusicQuery>(&memPtr[bufLoc]);
+-			slprs_jukebox_start_song(slprs_exi_device_ptr, args.offset, args.size);
++			rustCall([&] { return slprs_jukebox_start_song(slprs_exi_device_ptr, args.offset, args.size); });
+ 			break;
+ 		}
+ 		case CMD_STOP_MUSIC:
+-			slprs_jukebox_stop_music(slprs_exi_device_ptr);
++			rustCall([&] { return slprs_jukebox_stop_music(slprs_exi_device_ptr); });
+ 			break;
+ 		case CMD_CHANGE_MUSIC_VOLUME:
+ 		{
+ 			auto args = SlippiExiTypes::Convert<SlippiExiTypes::ChangeMusicVolumeQuery>(&memPtr[bufLoc]);
+-			slprs_jukebox_set_melee_music_volume(slprs_exi_device_ptr, args.volume);
++			rustCall([&] { return slprs_jukebox_set_melee_music_volume(slprs_exi_device_ptr, args.volume); });
+ 			break;
+ 		}
+ 		case CMD_GET_RANK:
+@@ -3566,13 +3747,13 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+ 		}
+ 		case CMD_FETCH_RANK:
+ 		{
+-			slprs_fetch_match_result(slprs_exi_device_ptr, recentMmResult.id.c_str());
++			rustCall([&] { return slprs_fetch_match_result(slprs_exi_device_ptr, recentMmResult.id.c_str()); });
+ 			break;
+ 		}
+ 		default:
+ 			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "");
+ 			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
+-			slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1);
++			rustCall([&] { return slprs_exi_device_reporter_push_replay_data(slprs_exi_device_ptr, &memPtr[bufLoc], payloadLen + 1); });
+ 			break;
+ 		}
+ 
+@@ -3620,20 +3801,20 @@ void CEXISlippi::ConfigureJukebox()
+ 	int systemVolume = SConfig::GetInstance().m_IsMuted ? 0 : SConfig::GetInstance().m_Volume;
+ 	int jukeboxVolume = SConfig::GetInstance().iSlippiJukeboxVolume;
+ 
+-	slprs_exi_device_configure_jukebox(slprs_exi_device_ptr, jukeboxEnabled, systemVolume, jukeboxVolume);
++	rustCall([&] { return slprs_exi_device_configure_jukebox(slprs_exi_device_ptr, jukeboxEnabled, systemVolume, jukeboxVolume); });
+ #endif
+ }
+ 
+ void CEXISlippi::SetJukeboxDolphinSystemVolume()
+ {
+ 	int systemVolume = SConfig::GetInstance().m_IsMuted ? 0 : SConfig::GetInstance().m_Volume;
+-	slprs_jukebox_set_dolphin_system_volume(slprs_exi_device_ptr, systemVolume);
++	rustCall([&] { return slprs_jukebox_set_dolphin_system_volume(slprs_exi_device_ptr, systemVolume); });
+ }
+ 
+ void CEXISlippi::SetJukeboxDolphinMusicVolume()
+ {
+ 	int jukeboxVolume = SConfig::GetInstance().iSlippiJukeboxVolume;
+-	slprs_jukebox_set_dolphin_music_volume(slprs_exi_device_ptr, jukeboxVolume);
++	rustCall([&] { return slprs_jukebox_set_dolphin_music_volume(slprs_exi_device_ptr, jukeboxVolume); });
+ }
+ 
+ bool CEXISlippi::IsPresent() const
+diff --git a/Source/Core/Core/HW/EXI_DeviceSlippi.h b/Source/Core/Core/HW/EXI_DeviceSlippi.h
+index c8fdedb..15cbefd 100644
+--- a/Source/Core/Core/HW/EXI_DeviceSlippi.h
++++ b/Source/Core/Core/HW/EXI_DeviceSlippi.h
+@@ -14,6 +14,10 @@
+ #include "Core/Slippi/SlippiGameFileLoader.h"
+ #include "Core/Slippi/SlippiMatchmaking.h"
+ #include "Core/Slippi/SlippiNetplay.h"
++#include "Core/Slippi/SlippiQueueControl.h"
++#include "Core/Slippi/SlippiSessionBarrier.h"
++#include <future>
++#include <ctime>
+ #include "Core/Slippi/SlippiReplayComm.h"
+ #include "Core/Slippi/SlippiSavestate.h"
+ #include "Core/Slippi/SlippiSpectate.h"
+@@ -26,7 +30,7 @@
+ extern bool g_needInputForFrame;
+ 
+ // Emulated Slippi device used to receive and respond to in-game messages
+-class CEXISlippi : public IEXIDevice
++class CEXISlippi : public IEXIDevice, private SlippiQueueControl::Backend
+ {
+   public:
+ 	CEXISlippi();
+@@ -107,7 +111,9 @@ class CEXISlippi : public IEXIDevice
+ 		CMD_PREMADE_TEXT_LOAD = 0xE2,
+ 		CMD_GET_RANK = 0xE3,
+ 		CMD_FETCH_RANK = 0xE4,
+-		CMD_GET_RANK_VISIBILITY = 0xE5
++		CMD_GET_RANK_VISIBILITY = 0xE5,
++		// Private development-fork extension; requires PFDQ/version capability discovery.
++		CMD_QUEUE_CONTROL = SlippiQueueControl::Command
+ 	};
+ 
+ 	enum
+@@ -196,12 +202,16 @@ class CEXISlippi : public IEXIDevice
+ 	    {CMD_GET_RANK, 0x0},
+ 	    {CMD_FETCH_RANK, 0x0},
+ 	    {CMD_GET_RANK_VISIBILITY, 0x0},
++	    {CMD_QUEUE_CONTROL, static_cast<u32>(SlippiQueueControl::RequestBytes)},
+ 	};
+ 
+ 	struct WriteMessage
+ 	{
+ 		std::vector<u8> data;
+ 		std::string operation;
++		time_t startTime = 0;
++		std::unordered_map<u8, std::string> playerNames;
++		std::unordered_map<u8, std::string> connectCodes;
+ 	};
+ 
+ 	// A pointer to a "shadow" EXI Device that lives on the Rust side of things.
+@@ -217,6 +227,8 @@ class CEXISlippi : public IEXIDevice
+ 
+ 	// vars for metadata generation
+ 	time_t gameStartTime;
++	// File-writer-owned snapshot; never read the next session's start time.
++	time_t replayStartTime = 0;
+ 	s32 lastFrame;
+ 	std::unordered_map<u8, std::unordered_map<u8, u32>> characterUsage;
+ 
+@@ -294,7 +306,7 @@ class CEXISlippi : public IEXIDevice
+ 	void FileWriteThread(void);
+ 
+ 	Common::FifoQueue<std::unique_ptr<WriteMessage>, false> fileWriteQueue;
+-	bool writeThreadRunning = false;
++	std::atomic<bool> writeThreadRunning{false};
+ 	std::thread m_fileWriteThread;
+ 
+ 	std::unordered_map<u8, std::string> getNetplayNames();
+@@ -347,6 +359,39 @@ class CEXISlippi : public IEXIDevice
+ 	void TransferByte(u8 &byte) override;
+ 
+   private:
++	template <typename F> auto rustCall(F&& call) const -> decltype(call())
++	{
++		return user->GetRustAccess().Call(std::forward<F>(call));
++	}
++
++	// Pending search only: no second emulated game or rollback state is parked.
++	struct PendingTeams
++	{
++		std::unique_ptr<SlippiMatchmaking> matchmaking;
++		SlippiPlayerSelections selections;
++		SlippiMatchmaking::MatchSearchSettings search;
++		std::vector<u16> allowedStages;
++		std::vector<u16> stagePool;
++	};
++	std::unique_ptr<PendingTeams> m_pendingTeams;
++	SlippiQueueControl m_queueControl;
++	SlippiSessionBarrier m_sessionBarrier;
++	bool m_restoredTeamsSelections = false;
++	std::vector<std::future<void>> m_connectionCleanup;
++	std::unique_ptr<SlippiMatchmaking> createForegroundMatchmaking();
++	void queueConnectionCleanup(std::unique_ptr<SlippiMatchmaking> mm,
++	                            std::unique_ptr<SlippiNetplayClient> client);
++	void handleQueueControl(const u8* payload, size_t length);
++	SlippiQueueControl::Mode ForegroundMode() const override;
++	bool ForegroundBusy() const override;
++	bool CanParkTeams() const override;
++	bool HasTeams() const override;
++	bool TeamsReady() const override;
++	bool TeamsFailed() const override;
++	void ParkTeams() override;
++	void ActivateTeams() override;
++	void CancelTeams() override;
++
+ 	SlippiPlayerSelections localSelections;
+ 
+ 	std::unique_ptr<SlippiUser> user;
+diff --git a/Source/Core/Core/Slippi/SlippiActiveClient.h b/Source/Core/Core/Slippi/SlippiActiveClient.h
+new file mode 100644
+index 0000000..aa8043b
+--- /dev/null
++++ b/Source/Core/Core/Slippi/SlippiActiveClient.h
+@@ -0,0 +1,39 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++
++#pragma once
++
++#include <atomic>
++
++// This is an identity marker, not ownership of a client. A pending background
++// connection must not become the gameplay client merely by being constructed.
++// Destruction/disconnect may only release the marker owned by that client.
++// No caller obtains or dereferences a pointer from this registry.
++template <typename Client>
++class SlippiActiveClient
++{
++public:
++  void Activate(Client* client)
++  {
++    m_client.store(client, std::memory_order_release);
++  }
++
++  void Release(Client* client)
++  {
++    m_client.compare_exchange_strong(client, nullptr, std::memory_order_acq_rel);
++  }
++
++  bool IsOnline() const
++  {
++    return m_client.load(std::memory_order_acquire) != nullptr;
++  }
++
++  bool IsActive(const Client* client) const
++  {
++    return m_client.load(std::memory_order_acquire) == client;
++  }
++
++private:
++  std::atomic<Client*> m_client{nullptr};
++};
+diff --git a/Source/Core/Core/Slippi/SlippiDirectCodes.cpp b/Source/Core/Core/Slippi/SlippiDirectCodes.cpp
+index 1ac1d96..7126993 100644
+--- a/Source/Core/Core/Slippi/SlippiDirectCodes.cpp
++++ b/Source/Core/Core/Slippi/SlippiDirectCodes.cpp
+@@ -8,7 +8,8 @@ DirectCodeKind mapCode(uint8_t code_kind) {
+ 		DirectCodeKind::TeamsCodes;
+ }
+ 
+-SlippiDirectCodes::SlippiDirectCodes(uintptr_t rs_exi_device_ptr, uint8_t code_kind)
++SlippiDirectCodes::SlippiDirectCodes(uintptr_t rs_exi_device_ptr, uint8_t code_kind,
++                                     const SlippiRustAccess& access) : m_rustAccess(access)
+ {
+ 	slprs_exi_device_ptr = rs_exi_device_ptr;
+    	kind = code_kind;
+@@ -18,11 +19,13 @@ SlippiDirectCodes::~SlippiDirectCodes() {}
+ 
+ void SlippiDirectCodes::AddOrUpdateCode(std::string code)
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	slprs_user_direct_codes_add_or_update(slprs_exi_device_ptr, mapCode(kind), code.c_str());
+ }
+ 
+ std::string SlippiDirectCodes::get(int index)
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	char *code = slprs_user_direct_codes_get_code_at_index(slprs_exi_device_ptr, mapCode(kind), index);
+     
+ 	// To be safe, just do an extra copy into a full C++ string type - i.e, the ownership
+@@ -37,5 +40,6 @@ std::string SlippiDirectCodes::get(int index)
+ 
+ int SlippiDirectCodes::length()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	return slprs_user_direct_codes_get_length(slprs_exi_device_ptr, mapCode(kind));
+ }
+diff --git a/Source/Core/Core/Slippi/SlippiDirectCodes.h b/Source/Core/Core/Slippi/SlippiDirectCodes.h
+index ceb83f5..b980106 100644
+--- a/Source/Core/Core/Slippi/SlippiDirectCodes.h
++++ b/Source/Core/Core/Slippi/SlippiDirectCodes.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <string>
++#include "Core/Slippi/SlippiRustAccess.h"
+ 
+ // This class is currently a shim for the Rust codes interface. We're doing it this way
+ // to migrate things over without needing to do larger invasive changes.
+@@ -17,7 +18,7 @@ class SlippiDirectCodes
+ 	static const uint8_t DIRECT = 0;
+ 	static const uint8_t TEAMS = 1;
+ 
+-	SlippiDirectCodes(uintptr_t rs_exi_device_ptr, uint8_t kind);
++	SlippiDirectCodes(uintptr_t rs_exi_device_ptr, uint8_t kind, const SlippiRustAccess& access);
+ 	~SlippiDirectCodes();
+ 
+ 	std::string get(int index);
+@@ -31,4 +32,5 @@ class SlippiDirectCodes
+ 
+ 	// An internal marker for what kind of codes we're reading/reporting.
+ 	uint8_t kind;
++	SlippiRustAccess m_rustAccess;
+ };
+diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
+index 3cf77d0..2159dd6 100644
+--- a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
++++ b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
+@@ -27,9 +27,12 @@ std::string MmMessageType::CREATE_TICKET = "create-ticket";
+ std::string MmMessageType::CREATE_TICKET_RESP = "create-ticket-resp";
+ std::string MmMessageType::GET_TICKET_RESP = "get-ticket-resp";
+ 
+-SlippiMatchmaking::SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *user)
++SlippiMatchmaking::SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *user,
++                                     bool activateNetplayForGameplay, bool allowConfiguredPort)
+ {
+ 	m_user = user;
++	m_activateNetplayForGameplay = activateNetplayForGameplay;
++	m_allowConfiguredPort = allowConfiguredPort;
+ 	m_state = ProcessState::IDLE;
+ 	m_errorMsg = "";
+ 
+@@ -47,11 +50,11 @@ SlippiMatchmaking::~SlippiMatchmaking()
+ {
+ 	isMmTerminated = true;
+ 	m_state = ProcessState::ERROR_ENCOUNTERED;
+-	m_errorMsg = "Matchmaking shut down";
+-
+ 	if (m_matchmakeThread.joinable())
+ 		m_matchmakeThread.join();
+ 
++	m_errorMsg = "Matchmaking shut down";
++
+ 	terminateMmConnection();
+ }
+ 
+@@ -70,7 +73,7 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
+ 
+ SlippiMatchmaking::ProcessState SlippiMatchmaking::GetMatchmakeState()
+ {
+-	return m_state;
++	return m_state.load(std::memory_order_acquire);
+ }
+ 
+ std::string SlippiMatchmaking::GetErrorMessage()
+@@ -80,7 +83,7 @@ std::string SlippiMatchmaking::GetErrorMessage()
+ 
+ bool SlippiMatchmaking::IsSearching()
+ {
+-	return searchingStates.count(m_state) != 0;
++	return searchingStates.count(m_state.load(std::memory_order_acquire)) != 0;
+ }
+ 
+ std::unique_ptr<SlippiNetplayClient> SlippiMatchmaking::GetNetplayClient()
+@@ -88,6 +91,17 @@ std::unique_ptr<SlippiNetplayClient> SlippiMatchmaking::GetNetplayClient()
+ 	return std::move(m_netplayClient);
+ }
+ 
++bool SlippiMatchmaking::HasConnectedPeers()
++{
++	// This is not an assignment/"opponent found" signal. The worker must have
++	// published a completed peer connection, and all expected peers must remain.
++	if (GetMatchmakeState() != ProcessState::CONNECTION_SUCCESS || !m_netplayClient)
++		return false;
++	return m_netplayClient->GetSlippiConnectStatus() ==
++	           SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED &&
++	       m_netplayClient->GetActivePlayerIndices().size() == RemotePlayerCount();
++}
++
+ bool SlippiMatchmaking::IsFixedRulesMode(SlippiMatchmaking::OnlinePlayMode mode)
+ {
+ 	return mode == SlippiMatchmaking::OnlinePlayMode::UNRANKED || mode == SlippiMatchmaking::OnlinePlayMode::RANKED ||
+@@ -155,7 +169,7 @@ void SlippiMatchmaking::MatchmakeThread()
+ 			break;
+ 		}
+ 
+-		switch (m_state)
++		switch (m_state.load(std::memory_order_acquire))
+ 		{
+ 		case ProcessState::INITIALIZING:
+ 			startMatchmaking();
+@@ -285,7 +299,11 @@ void SlippiMatchmaking::startMatchmaking()
+ 	// If IsFixedRules mode, don't allow ISO's that are known to desync
+ 	if (IsFixedRulesMode(m_searchSettings.mode))
+ 	{
+-		auto check = slprs_get_iso_md5_check(slprs_exi_device_ptr);
++		auto readCheck = [this] {
++			auto rustAccess = m_user->GetRustAccess().Lock();
++			return slprs_get_iso_md5_check(slprs_exi_device_ptr);
++		};
++		auto check = readCheck();
+ 		while (check.result == 0)
+ 		{
+ 			Common::SleepCurrentThread(500);
+@@ -296,7 +314,7 @@ void SlippiMatchmaking::startMatchmaking()
+ 				m_errorMsg = "Could not validate ISO";
+ 				return;
+ 			}
+-			check = slprs_get_iso_md5_check(slprs_exi_device_ptr);
++			check = readCheck();
+ 		}
+ 
+ 		if (check.result == 2)
+@@ -311,7 +329,7 @@ void SlippiMatchmaking::startMatchmaking()
+ 	auto userInfo = m_user->GetUserInfo();
+ 	while (m_client == nullptr && retryCount < 15)
+ 	{
+-		bool customPort = SConfig::GetInstance().m_slippiForceNetplayPort;
++		bool customPort = m_allowConfiguredPort && SConfig::GetInstance().m_slippiForceNetplayPort;
+ 
+ 		if (customPort)
+ 			m_hostPort = SConfig::GetInstance().m_slippiNetplayPort;
+@@ -650,6 +668,7 @@ void SlippiMatchmaking::handleMatchmaking()
+ 	// If ranked, report to backend that we are attempting to connect to this match
+ 	if (matchId.find("mode.ranked") != std::string::npos)
+ 	{
++		auto rustAccess = m_user->GetRustAccess().Lock();
+ 		slprs_exi_device_report_match_status(slprs_exi_device_ptr, matchId.c_str(), "connecting", true);
+ 	}
+ 
+@@ -842,7 +861,7 @@ void SlippiMatchmaking::handleConnecting()
+ 
+ 	// Is host is now used to specify who the decider is
+ 	auto client = std::make_unique<SlippiNetplayClient>(addrs, ports, remotePlayerCount, m_hostPort, m_isHost,
+-	                                                    m_localPlayerIndex);
++	                                                    m_localPlayerIndex, m_activateNetplayForGameplay);
+ 
+ 	while (!m_netplayClient)
+ 	{
+diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.h b/Source/Core/Core/Slippi/SlippiMatchmaking.h
+index 8585931..a362ee6 100644
+--- a/Source/Core/Core/Slippi/SlippiMatchmaking.h
++++ b/Source/Core/Core/Slippi/SlippiMatchmaking.h
+@@ -10,6 +10,7 @@
+ #include <arpa/inet.h>
+ #endif
+ 
++#include <atomic>
+ #include <unordered_map>
+ #include <vector>
+ #include <json.hpp>
+@@ -19,7 +20,8 @@ using json = nlohmann::json;
+ class SlippiMatchmaking
+ {
+   public:
+-	SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *user);
++	SlippiMatchmaking(uintptr_t rs_exi_device_ptr, SlippiUser *user, bool activateNetplayForGameplay = true,
++	                  bool allowConfiguredPort = true);
+ 	~SlippiMatchmaking();
+ 
+ 	enum OnlinePlayMode
+@@ -84,6 +86,8 @@ class SlippiMatchmaking
+ 	ProcessState GetMatchmakeState();
+ 	bool IsSearching();
+ 	std::unique_ptr<SlippiNetplayClient> GetNetplayClient();
++	// CPU-thread query after the atomic CONNECTION_SUCCESS publication.
++	bool HasConnectedPeers();
+ 	std::string GetErrorMessage();
+ 	int LocalPlayerIndex();
+ 	std::vector<SlippiUser::UserInfo> GetPlayerInfo();
+@@ -107,16 +111,19 @@ class SlippiMatchmaking
+ 	std::default_random_engine generator;
+ 
+ 	bool isMmConnected = false;
+-	bool isMmTerminated = false;
++	std::atomic<bool> isMmTerminated{false};
+ 
+ 	std::thread m_matchmakeThread;
+ 
+ 	MatchSearchSettings m_searchSettings;
+ 
+-	ProcessState m_state;
++	std::atomic<ProcessState> m_state{ProcessState::IDLE};
+ 	std::string m_errorMsg = "";
+ 
+ 	SlippiUser *m_user;
++	// A standby Teams search must not publish itself as active gameplay.
++	bool m_activateNetplayForGameplay;
++	bool m_allowConfiguredPort;
+ 
+ 	int m_isSwapAttempt = false;
+ 
+diff --git a/Source/Core/Core/Slippi/SlippiNetplay.cpp b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+index 3a2ee52..51ef358 100644
+--- a/Source/Core/Core/Slippi/SlippiNetplay.cpp
++++ b/Source/Core/Core/Slippi/SlippiNetplay.cpp
+@@ -36,7 +36,7 @@
+ static std::mutex pad_mutex;
+ static std::mutex ack_mutex;
+ 
+-SlippiNetplayClient *SLIPPI_NETPLAY = nullptr;
++SlippiActiveClient<SlippiNetplayClient> SLIPPI_NETPLAY;
+ 
+ // called from ---GUI--- thread
+ SlippiNetplayClient::~SlippiNetplayClient()
+@@ -60,14 +60,15 @@ SlippiNetplayClient::~SlippiNetplayClient()
+ 		m_client = nullptr;
+ 	}
+ 
+-	SLIPPI_NETPLAY = nullptr;
++	SLIPPI_NETPLAY.Release(this);
+ 
+ 	WARN_LOG(SLIPPI_ONLINE, "Netplay client cleanup complete");
+ }
+ 
+ // called from ---SLIPPI EXI--- thread
+ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::vector<u16> ports,
+-                                         const u8 remotePlayerCount, const u16 localPort, bool isDecider, u8 playerIdx)
++                                         const u8 remotePlayerCount, const u16 localPort, bool isDecider, u8 playerIdx,
++                                         bool activateForGameplay)
+ #ifdef _WIN32
+     : m_qos_handle(nullptr)
+     , m_qos_flow_id(0)
+@@ -95,7 +96,8 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
+ 		this->lastFrameAcked[i] = 0; // First frame should be 1 in this context so 0 is the correct reset (I think)
+ 	}
+ 
+-	SLIPPI_NETPLAY = std::move(this);
++	if (activateForGameplay)
++		ActivateForGameplay();
+ 
+ 	// Local address
+ 	ENetAddress *localAddr = nullptr;
+@@ -160,10 +162,15 @@ SlippiNetplayClient::SlippiNetplayClient(std::vector<std::string> addrs, std::ve
+ SlippiNetplayClient::SlippiNetplayClient(bool isDecider)
+ {
+ 	this->isDecider = isDecider;
+-	SLIPPI_NETPLAY = std::move(this);
++	ActivateForGameplay();
+ 	slippiConnectStatus.store(SlippiConnectStatus::NET_CONNECT_STATUS_FAILED, std::memory_order_release);
+ }
+ 
++void SlippiNetplayClient::ActivateForGameplay()
++{
++	SLIPPI_NETPLAY.Activate(this);
++}
++
+ u8 SlippiNetplayClient::PlayerIdxFromPort(u8 port)
+ {
+ 	u8 p = port;
+@@ -752,7 +759,7 @@ void SlippiNetplayClient::Disconnect()
+ 	for (auto &active : playerActive)
+ 		active.store(false, std::memory_order_release);
+ 	m_server.clear();
+-	SLIPPI_NETPLAY = nullptr;
++	SLIPPI_NETPLAY.Release(this);
+ }
+ 
+ void SlippiNetplayClient::SendAsync(std::unique_ptr<sf::Packet> packet)
+diff --git a/Source/Core/Core/Slippi/SlippiNetplay.h b/Source/Core/Core/Slippi/SlippiNetplay.h
+index 99e8424..2414697 100644
+--- a/Source/Core/Core/Slippi/SlippiNetplay.h
++++ b/Source/Core/Core/Slippi/SlippiNetplay.h
+@@ -11,6 +11,7 @@
+ #include "Common/TraversalClient.h"
+ #include "Core/NetPlayProto.h"
+ #include "Core/Slippi/SlippiPad.h"
++#include "Core/Slippi/SlippiActiveClient.h"
+ #include "InputCommon/GCPadStatus.h"
+ #include <SFML/Network/Packet.hpp>
+ #include <SlippiLib/SlippiGame.h>
+@@ -160,9 +161,12 @@ class SlippiNetplayClient
+ 
+ 	SlippiNetplayClient(bool isDecider); // Make a dummy client
+ 	SlippiNetplayClient(std::vector<std::string> addrs, std::vector<u16> ports, const u8 remotePlayerCount,
+-	                    const u16 localPort, bool isDecider, u8 playerIdx);
++	                    const u16 localPort, bool isDecider, u8 playerIdx, bool activateForGameplay = true);
+ 	~SlippiNetplayClient();
+ 
++	// Called by the EXI session controller when a standby connection becomes gameplay.
++	void ActivateForGameplay();
++
+ 	// Slippi Online
+ 	enum class SlippiConnectStatus
+ 	{
+@@ -337,9 +341,9 @@ class SlippiNetplayClient
+ 
+ 	u32 m_timebase_frame = 0;
+ };
+-extern SlippiNetplayClient *SLIPPI_NETPLAY; // singleton static pointer
++extern SlippiActiveClient<SlippiNetplayClient> SLIPPI_NETPLAY;
+ 
+ static bool IsOnline()
+ {
+-	return SLIPPI_NETPLAY != nullptr;
++	return SLIPPI_NETPLAY.IsOnline();
+ }
+diff --git a/Source/Core/Core/Slippi/SlippiPremadeText.h b/Source/Core/Core/Slippi/SlippiPremadeText.h
+index 5579259..641a40d 100644
+--- a/Source/Core/Core/Slippi/SlippiPremadeText.h
++++ b/Source/Core/Core/Slippi/SlippiPremadeText.h
+@@ -1,4 +1,5 @@
+ ﻿#pragma once
++#include <cstring>
+ 
+ #include "Common/Logging/Log.h"
+ #include "Common/StringUtil.h"
+diff --git a/Source/Core/Core/Slippi/SlippiQueueControl.h b/Source/Core/Core/Slippi/SlippiQueueControl.h
+new file mode 100644
+index 0000000..d79375d
+--- /dev/null
++++ b/Source/Core/Core/Slippi/SlippiQueueControl.h
+@@ -0,0 +1,125 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++
++// Private, versioned extension for this development fork. Not a stock Slippi API.
++// The game must discover the capability before exposing a parallel-queue option.
++// Calls are serialized on the emulated CPU / EXI thread.
++class SlippiQueueControl
++{
++public:
++  static constexpr std::uint8_t Command = 0xe6;
++  static constexpr std::size_t RequestBytes = 12;
++  using Reply = std::array<std::uint8_t, 16>;
++  enum class Mode : std::uint8_t { Ranked = 0, Unranked = 1, Direct = 2, Teams = 3, None = 0xff };
++  static bool IsSinglesMode(Mode mode) { return mode == Mode::Direct || mode == Mode::Unranked; }
++  static bool ShouldYieldToTeams(Mode mode, bool singlesConnected, bool teamsConnected)
++  {
++    return IsSinglesMode(mode) && singlesConnected && teamsConnected;
++  }
++  enum class Op : std::uint8_t { Capabilities, ParkTeams, Status, ActivateTeams, CancelTeams };
++  enum class Result : std::uint8_t
++  {
++    Ok, Malformed, UnsupportedVersion, UnsupportedOperation, StaleGeneration,
++    NoTeams, AlreadyParked, WrongMode, Busy, NotReady, InternalError
++  };
++  class Backend
++  {
++  public:
++    virtual ~Backend() = default;
++    virtual Mode ForegroundMode() const = 0;
++    virtual bool ForegroundBusy() const = 0;
++    virtual bool CanParkTeams() const = 0;
++    virtual bool HasTeams() const = 0;
++    virtual bool TeamsReady() const = 0;
++    virtual bool TeamsFailed() const = 0;
++    virtual void ParkTeams() = 0;
++    virtual void ActivateTeams() = 0;
++    virtual void CancelTeams() = 0;
++  };
++
++  Reply Handle(const std::uint8_t* request, std::size_t size, Backend& backend)
++  {
++    Result result = Result::Ok;
++    if (request == nullptr || size != RequestBytes || request[0] != 'P' || request[1] != 'F' ||
++        request[2] != 'D' || request[3] != 'Q' || request[6] != 0 || request[7] != 0)
++      return Respond(Result::Malformed, backend);
++    if (request[4] != 1)
++      return Respond(Result::UnsupportedVersion, backend);
++    const auto op = static_cast<Op>(request[5]);
++    const std::uint32_t generation = (std::uint32_t(request[8]) << 24) |
++        (std::uint32_t(request[9]) << 16) | (std::uint32_t(request[10]) << 8) | request[11];
++    switch (op)
++    {
++    case Op::Capabilities:
++    case Op::Status:
++      break;
++    case Op::ParkTeams:
++      if (generation != 0)
++        result = Result::StaleGeneration;
++      else if (backend.HasTeams())
++        result = Result::AlreadyParked;
++      else if (backend.ForegroundMode() != Mode::Teams)
++        result = Result::WrongMode;
++      else if (!backend.CanParkTeams())
++        result = Result::Busy;
++      else
++      {
++        backend.ParkTeams();
++        AdvanceGeneration();
++      }
++      break;
++    case Op::ActivateTeams:
++    case Op::CancelTeams:
++      if (generation == 0 || generation != m_generation)
++        result = Result::StaleGeneration;
++      else if (!backend.HasTeams())
++        result = Result::NoTeams;
++      else if (op == Op::ActivateTeams && backend.ForegroundBusy())
++        result = Result::Busy;
++      else if (op == Op::ActivateTeams && !backend.TeamsReady())
++        result = Result::NotReady;
++      else
++      {
++        if (op == Op::ActivateTeams)
++          backend.ActivateTeams();
++        else
++          backend.CancelTeams();
++        AdvanceGeneration();
++      }
++      break;
++    default:
++      result = Result::UnsupportedOperation;
++      break;
++    }
++    return Respond(result, backend);
++  }
++
++  Reply Respond(Result result, const Backend& backend) const
++  {
++    Reply out{{'P', 'F', 'D', 'Q', 1, static_cast<std::uint8_t>(result), 0,
++               static_cast<std::uint8_t>(backend.ForegroundMode()), 0, 0, 0, 0, 0, 0, 0, 15}};
++    if (backend.HasTeams())
++    {
++      out[6] |= 1;
++      // A peer can disconnect between queries; never publish failed AND ready.
++      if (backend.TeamsFailed()) out[6] |= 4;
++      else if (backend.TeamsReady()) out[6] |= 2;
++    }
++    out[8] = static_cast<std::uint8_t>(m_generation >> 24);
++    out[9] = static_cast<std::uint8_t>(m_generation >> 16);
++    out[10] = static_cast<std::uint8_t>(m_generation >> 8);
++    out[11] = static_cast<std::uint8_t>(m_generation);
++    return out;
++  }
++
++private:
++  void AdvanceGeneration() { if (++m_generation == 0) ++m_generation; }
++  std::uint32_t m_generation = 0;
++};
+diff --git a/Source/Core/Core/Slippi/SlippiRustAccess.h b/Source/Core/Core/Slippi/SlippiRustAccess.h
+new file mode 100644
+index 0000000..4721eb4
+--- /dev/null
++++ b/Source/Core/Core/Slippi/SlippiRustAccess.h
+@@ -0,0 +1,25 @@
++// Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+.
++#pragma once
++#include <memory>
++#include <mutex>
++#include <utility>
++
++// The current Rust FFI temporarily reconstructs an owning Box and passes a
++// mutable device reference for each opaque device call. Calls on the same device must never overlap. Copies of
++// this access object share the gate across EXI, user, codes and matchmaking.
++class SlippiRustAccess
++{
++public:
++  SlippiRustAccess() : m_mutex(std::make_shared<std::recursive_mutex>()) {}
++  std::unique_lock<std::recursive_mutex> Lock() const
++  {
++    return std::unique_lock<std::recursive_mutex>(*m_mutex);
++  }
++  template <typename F> auto Call(F&& call) const -> decltype(call())
++  {
++    auto lock = Lock();
++    return call();
++  }
++private:
++  std::shared_ptr<std::recursive_mutex> m_mutex;
++};
+diff --git a/Source/Core/Core/Slippi/SlippiSessionBarrier.h b/Source/Core/Core/Slippi/SlippiSessionBarrier.h
+new file mode 100644
+index 0000000..60da1b0
+--- /dev/null
++++ b/Source/Core/Core/Slippi/SlippiSessionBarrier.h
+@@ -0,0 +1,27 @@
++// Copyright 2026 Dolphin Emulator Project
++// Licensed under GPLv2+
++// Refer to the license.txt file included.
++#pragma once
++#include <atomic>
++#include <cstdint>
++
++// CPU-thread gameplay/report state plus a producer/worker replay drain barrier.
++// A connection cleanup alone does not prove that the previous game is finished.
++class SlippiSessionBarrier
++{
++public:
++  void BeginOnlineGame() { m_gameplay = true; m_report = true; }
++  void EndGame() { m_gameplay = false; }
++  void ReportFinished() { m_report = false; }
++  void ReplayQueued() { m_submitted.fetch_add(1, std::memory_order_release); }
++  void ReplayWritten() { m_completed.fetch_add(1, std::memory_order_release); }
++  bool OnlineIdle() const { return !m_gameplay && !m_report; }
++  bool Idle() const
++  {
++    return OnlineIdle() &&
++        m_submitted.load(std::memory_order_acquire) == m_completed.load(std::memory_order_acquire);
++  }
++private:
++  bool m_gameplay = false, m_report = false;
++  std::atomic<std::uint64_t> m_submitted{0}, m_completed{0};
++};
+diff --git a/Source/Core/Core/Slippi/SlippiUser.cpp b/Source/Core/Core/Slippi/SlippiUser.cpp
+index 10b81dc..ca43653 100644
+--- a/Source/Core/Core/Slippi/SlippiUser.cpp
++++ b/Source/Core/Core/Slippi/SlippiUser.cpp
+@@ -31,36 +31,43 @@ SlippiUser::~SlippiUser() {}
+ 
+ bool SlippiUser::AttemptLogin()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	return slprs_user_attempt_login(slprs_exi_device_ptr);
+ }
+ 
+ void SlippiUser::OpenLogInPage()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	slprs_user_open_login_page(slprs_exi_device_ptr);
+ }
+ 
+ void SlippiUser::ListenForLogIn()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	slprs_user_listen_for_login(slprs_exi_device_ptr);
+ }
+ 
+ bool SlippiUser::UpdateApp()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	return slprs_user_update_app(slprs_exi_device_ptr);
+ }
+ 
+ void SlippiUser::LogOut()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	slprs_user_logout(slprs_exi_device_ptr);
+ }
+ 
+ void SlippiUser::OverwriteLatestVersion(std::string version)
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	slprs_user_overwrite_latest_version(slprs_exi_device_ptr, version.c_str());
+ }
+ 
+ SlippiUser::UserInfo SlippiUser::GetUserInfo()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	SlippiUser::UserInfo userInfo;
+ 
+ 	RustUserInfo *info = slprs_user_get_info(slprs_exi_device_ptr);
+@@ -76,17 +83,20 @@ SlippiUser::UserInfo SlippiUser::GetUserInfo()
+ 
+ std::vector<std::string> SlippiUser::GetDefaultChatMessages()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	RustChatMessages *chatMessages = slprs_user_get_default_messages(slprs_exi_device_ptr);
+ 	return ConvertChatMessagesFromRust(chatMessages);
+ }
+ 
+ std::vector<std::string> SlippiUser::GetUserChatMessages()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	RustChatMessages *chatMessages = slprs_user_get_messages(slprs_exi_device_ptr);
+ 	return ConvertChatMessagesFromRust(chatMessages);
+ }
+ 
+ bool SlippiUser::IsLoggedIn()
+ {
++	auto rustAccess = m_rustAccess.Lock();
+ 	return slprs_user_get_is_logged_in(slprs_exi_device_ptr);
+ }
+diff --git a/Source/Core/Core/Slippi/SlippiUser.h b/Source/Core/Core/Slippi/SlippiUser.h
+index 31e305e..9baab61 100644
+--- a/Source/Core/Core/Slippi/SlippiUser.h
++++ b/Source/Core/Core/Slippi/SlippiUser.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "Common/CommonTypes.h"
++#include "Core/Slippi/SlippiRustAccess.h"
+ #include <atomic>
+ #include <curl/curl.h>
+ #include <string>
+@@ -43,6 +44,7 @@ class SlippiUser
+ 	SlippiUser(uintptr_t rs_exi_device_ptr);
+ 	~SlippiUser();
+ 
++	const SlippiRustAccess& GetRustAccess() const { return m_rustAccess; }
+ 	bool AttemptLogin();
+ 	void OpenLogInPage();
+ 	bool UpdateApp();
+@@ -58,4 +60,5 @@ class SlippiUser
+ 	// A pointer to a "shadow" EXI Device that lives on the Rust side of things.
+ 	// Do *not* do any cleanup of this! The EXI device will handle it.
+ 	uintptr_t slprs_exi_device_ptr;
++	SlippiRustAccess m_rustAccess;
+ };

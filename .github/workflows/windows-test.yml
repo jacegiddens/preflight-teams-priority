@@ -1,0 +1,117 @@
+name: Build Windows Teams Priority test
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/windows-test.yml'
+      - 'parallel-queue/**'
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      DXSDK_DIR: 'C:\Program Files (x86)\Microsoft DirectX SDK (June 2010)\'
+      DOLPHIN_DISTRIBUTOR: 'Experimental Teams Priority'
+    steps:
+      - name: Checkout this build project
+        uses: actions/checkout@v4
+      - name: Preserve patch line endings
+        run: git config --global core.autocrlf false
+      - name: Checkout original Slippi 3.6.4 source
+        uses: actions/checkout@v4
+        with:
+          repository: project-slippi/Ishiiruka
+          ref: v3.6.4
+          path: dolphin
+          fetch-depth: 0
+          submodules: recursive
+      - name: Apply reviewed source changes
+        shell: pwsh
+        run: |
+          git -C dolphin apply --check ../parallel-queue/dolphin.patch
+          if ($LASTEXITCODE) { throw 'Source patch did not match upstream.' }
+          git -C dolphin apply ../parallel-queue/dolphin.patch
+          if ($LASTEXITCODE) { throw 'Could not apply source patch.' }
+      - name: Install the pinned Rust compiler
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: '1.88.0'
+          rustflags: ''
+      - name: Set up Visual Studio build tools
+        uses: microsoft/setup-msbuild@v2
+      - name: Set up the C++ compiler for isolated checks
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Test Windows session ownership and protocol code
+        shell: pwsh
+        working-directory: dolphin
+        run: |
+          New-Item -ItemType Directory -Force checks | Out-Null
+          foreach ($name in @('ActiveClient','QueueControl','SessionBarrier','RustAccess')) {
+            & cl.exe /nologo /std:c++14 /EHsc /W4 /WX /I Source/Core "Development/SingleInstance/${name}Test.cpp" "/Fe:checks/$name.exe" "/Fo:checks/$name.obj"
+            if ($LASTEXITCODE) { throw "$name did not compile." }
+            & "./checks/$name.exe"
+            if ($LASTEXITCODE) { throw "$name failed." }
+          }
+          & cl.exe /nologo /TC /W4 /WX /c Development/SingleInstance/Game/queue_client.c /Fo:checks/queue_client.obj
+          if ($LASTEXITCODE) { throw 'C protocol client did not compile.' }
+          & cl.exe /nologo /std:c++14 /EHsc /W4 /WX /I Source/Core Development/SingleInstance/GameClientTest.cpp checks/queue_client.obj /Fe:checks/GameClient.exe /Fo:checks/GameClient.obj
+          if ($LASTEXITCODE) { throw 'Protocol integration test did not compile.' }
+          & ./checks/GameClient.exe
+          if ($LASTEXITCODE) { throw 'Protocol integration test failed.' }
+      - name: Install legacy DirectX headers required by upstream
+        shell: pwsh
+        run: |
+          # The upstream build removes these old redists before DXSDK setup.
+          foreach ($product in @('{F0C3E5D1-1ADE-321E-8167-68EF0DE699A5}', '{1D8E6291-B0D5-35EC-8441-6616F567A0F7}')) {
+            Start-Process msiexec.exe -ArgumentList @('/passive','/norestart',"/X$product") -Wait
+          }
+          choco install directx-sdk -y --no-progress
+          if ($LASTEXITCODE -notin @(0,1641,3010)) { throw 'DirectX SDK installation failed.' }
+      - name: Build the Windows Dolphin executable
+        shell: pwsh
+        run: |
+          $sdk = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Include' -Directory |
+            Where-Object { $_.Name -match '^10\.0\.[0-9]+\.[0-9]+$' } |
+            Sort-Object { [version]$_.Name } | Select-Object -Last 1
+          if (-not $sdk) { throw 'No installed Windows SDK found.' }
+          & msbuild.exe dolphin/Source/Dolphin.sln /m /p:Configuration=Release /p:Platform=x64 "/p:WindowsTargetPlatformVersion=$($sdk.Name)" /p:PreferredToolArchitecture=x64 /bl:windows-build.binlog
+          if ($LASTEXITCODE) { throw 'Dolphin build failed. See build log.' }
+      - name: Package the experimental build and ISO patcher
+        shell: pwsh
+        run: |
+          $output = 'dolphin/Binary/x64'
+          foreach ($file in @('Slippi Dolphin.exe','slippi_rust_extensions.dll')) {
+            if (-not (Test-Path "$output/$file")) { throw "Missing runtime file: $file" }
+          }
+          New-Item -ItemType Directory -Force "$output/Sys" | Out-Null
+          Copy-Item dolphin/Data/Sys/* "$output/Sys/" -Recurse -Force
+          Copy-Item parallel-queue/Patch-Preflight.cmd,parallel-queue/Patch-Preflight.ps1,parallel-queue/preflight-parallel-queue.delta.json,parallel-queue/TESTING.txt $output
+          # Keep the test install separate. The user copies their existing User
+          # folder into this directory once; no credentials enter this repository.
+          Set-Content -LiteralPath "$output/portable.txt" -Value '' -NoNewline
+          Copy-Item parallel-queue/dolphin.patch "$output/source-changes.patch"
+          Set-Content "$output/SOURCE.txt" @"
+          Experimental source: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}
+          Upstream base: https://github.com/project-slippi/Ishiiruka/tree/e7711b104b339a99385f2bb12b472d46140a7bc7
+          See source-changes.patch and the upstream license.txt for corresponding changes and license.
+          "@
+          Get-ChildItem $output -Recurse -File | Where-Object { $_.Extension -in '.pdb','.exp','.lib' } | Remove-Item
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          Compress-Archive -Path "$output/*" -DestinationPath artifact/Slippi-Teams-Priority-Windows-test.zip
+      - name: Upload Windows test ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Slippi-Teams-Priority-Windows-test
+          path: artifact/Slippi-Teams-Priority-Windows-test.zip
+          retention-days: 14
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-build-log
+          path: windows-build.binlog
+          if-no-files-found: ignore

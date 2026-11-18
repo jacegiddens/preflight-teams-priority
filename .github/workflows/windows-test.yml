@@ -1,10 +1,6 @@
-name: Build Windows Teams Priority test
+name: Build Windows Teams Priority 3.7.0 test
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - '.github/workflows/windows-test.yml'
-      - 'parallel-queue/**'
 permissions:
   contents: read
 jobs:
@@ -19,11 +15,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Preserve patch line endings
         run: git config --global core.autocrlf false
-      - name: Checkout original Slippi 3.6.4 source
+      - name: Checkout pinned Slippi 3.7.0 source
         uses: actions/checkout@v4
         with:
           repository: project-slippi/Ishiiruka
-          ref: v3.6.4
+          ref: 07b2d287a1f074942811d13b3c990fa29401ba7c
           path: dolphin
           fetch-depth: 0
           submodules: recursive
@@ -38,11 +34,27 @@ jobs:
           if ($LASTEXITCODE) { throw 'Source patch did not match upstream.' }
           git -C dolphin apply ../parallel-queue/dolphin.patch
           if ($LASTEXITCODE) { throw 'Could not apply source patch.' }
+          $rust = 'dolphin/Externals/SlippiRustExtensions'
+          $rustCommit = git -C $rust rev-parse HEAD
+          if ($rustCommit -ne '934f373d3cbcbca9ea3ceb68b53bda875c96abfb') { throw 'Unexpected Rust submodule version.' }
+          git -c core.autocrlf=false -c core.eol=lf checkout-index --force -- parallel-queue/rust.patch
+          if ($LASTEXITCODE) { throw 'Could not normalize Rust patch line endings.' }
+          git -C $rust -c core.autocrlf=false -c core.eol=lf checkout-index --force --all
+          if ($LASTEXITCODE) { throw 'Could not normalize Rust source line endings.' }
+          git -C $rust apply --check ../../../parallel-queue/rust.patch
+          if ($LASTEXITCODE) { throw 'Rust patch did not match upstream.' }
+          git -C $rust apply ../../../parallel-queue/rust.patch
+          if ($LASTEXITCODE) { throw 'Could not apply Rust patch.' }
       - name: Install the pinned Rust compiler
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: '1.88.0'
           rustflags: ''
+      - name: Test independent WebSocket matchmaking clients
+        shell: pwsh
+        run: |
+          cargo test --locked --manifest-path dolphin/Externals/SlippiRustExtensions/Cargo.toml -p slippi-matchmaking --lib
+          if ($LASTEXITCODE) { throw 'Rust matchmaking tests failed.' }
       - name: Set up Visual Studio build tools
         uses: microsoft/setup-msbuild@v2
       - name: Set up the C++ compiler for isolated checks
@@ -93,24 +105,28 @@ jobs:
           }
           New-Item -ItemType Directory -Force "$output/Sys" | Out-Null
           Copy-Item dolphin/Data/Sys/* "$output/Sys/" -Recurse -Force
+          Copy-Item dolphin/license.txt "$output/license.txt"
           Copy-Item parallel-queue/Patch-Preflight.cmd,parallel-queue/Patch-Preflight.ps1,parallel-queue/preflight-parallel-queue.delta.json,parallel-queue/TESTING.txt $output
           # Keep the test install separate. The user copies their existing User
           # folder into this directory once; no credentials enter this repository.
           Set-Content -LiteralPath "$output/portable.txt" -Value '' -NoNewline
           Copy-Item parallel-queue/dolphin.patch "$output/source-changes.patch"
+          Copy-Item parallel-queue/rust.patch "$output/rust-source-changes.patch"
+          Copy-Item dolphin/Externals/SlippiRustExtensions/LICENSE "$output/RUST-LICENSE.txt"
           Set-Content "$output/SOURCE.txt" @"
           Experimental source: ${{ github.server_url }}/${{ github.repository }}/tree/${{ github.sha }}
-          Upstream base: https://github.com/project-slippi/Ishiiruka/tree/e7711b104b339a99385f2bb12b472d46140a7bc7
-          See source-changes.patch and the upstream license.txt for corresponding changes and license.
+          Upstream base: https://github.com/project-slippi/Ishiiruka/tree/07b2d287a1f074942811d13b3c990fa29401ba7c
+          Rust base: https://github.com/project-slippi/slippi-rust-extensions/tree/934f373d3cbcbca9ea3ceb68b53bda875c96abfb
+          See source-changes.patch, rust-source-changes.patch, upstream license.txt and RUST-LICENSE.txt.
           "@
           Get-ChildItem $output -Recurse -File | Where-Object { $_.Extension -in '.pdb','.exp','.lib' } | Remove-Item
           New-Item -ItemType Directory -Force artifact | Out-Null
-          Compress-Archive -Path "$output/*" -DestinationPath artifact/Slippi-Teams-Priority-Windows-test.zip
+          Compress-Archive -Path "$output/*" -DestinationPath artifact/Slippi-Teams-Priority-3.7.0-test.zip
       - name: Upload Windows test ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Slippi-Teams-Priority-Windows-test
-          path: artifact/Slippi-Teams-Priority-Windows-test.zip
+          name: Slippi-Teams-Priority-3.7.0-test
+          path: artifact/Slippi-Teams-Priority-3.7.0-test.zip
           retention-days: 14
       - name: Upload build log on failure
         if: failure()

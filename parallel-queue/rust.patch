@@ -1,0 +1,318 @@
+diff --git a/ffi/includes/SlippiRustExtensions.h b/ffi/includes/SlippiRustExtensions.h
+index 033990e..81f1700 100644
+--- a/ffi/includes/SlippiRustExtensions.h
++++ b/ffi/includes/SlippiRustExtensions.h
+@@ -546,6 +546,29 @@ bool slprs_match_quality_on_frame(struct SlippiMatchQualityFrame frame);
+  */
+ uint64_t slprs_mm_start(uintptr_t exi_device_instance_ptr, struct SlippiMatchmakingRequest request);
+ 
++/**
++ * Creates an independent matchmaking client sharing the device's user identity.
++ * Dolphin serializes this call with other opaque EXI-device calls. Thereafter
++ * each handle is owned by one C++ matchmaking context and used by its worker;
++ * destruction happens only after that worker has joined.
++ */
++uintptr_t slprs_mm_client_create(uintptr_t exi_device_instance_ptr);
++
++/**
++ * Destroys exactly this independent client; no other ticket is cancelled.
++ */
++void slprs_mm_client_destroy(uintptr_t client);
++
++uint64_t slprs_mm_client_start(uintptr_t client, struct SlippiMatchmakingRequest request);
++
++int slprs_mm_client_state(uintptr_t client);
++
++char *slprs_mm_client_take_result_json(uintptr_t client);
++
++char *slprs_mm_client_error_message(uintptr_t client);
++
++void slprs_mm_client_cancel(uintptr_t client, uint64_t session_id);
++
+ /**
+  * Current session state: 0 idle, 1 connecting, 2 queued, 3 matched, 4 failed.
+  */
+diff --git a/ffi/src/matchmaking.rs b/ffi/src/matchmaking.rs
+index dd6788f..958a55a 100644
+--- a/ffi/src/matchmaking.rs
++++ b/ffi/src/matchmaking.rs
+@@ -2,7 +2,7 @@ use std::ffi::{CString, c_char, c_int};
+ use std::net::{Ipv4Addr, SocketAddrV4};
+ 
+ use slippi_exi_device::SlippiEXIDevice;
+-use slippi_matchmaking::{MatchRequest, REQUEST_LEN, build_binding_request, parse_binding_response};
++use slippi_matchmaking::{MatchRequest, MatchmakingClient, REQUEST_LEN, build_binding_request, parse_binding_response};
+ 
+ use crate::{c_str_to_string, with, with_returning};
+ 
+@@ -50,28 +50,80 @@ pub struct SlippiMatchmakingRequest {
+ /// running is cancelled first. Progress is polled with `slprs_mm_state`.
+ #[unsafe(no_mangle)]
+ pub extern "C" fn slprs_mm_start(exi_device_instance_ptr: usize, request: SlippiMatchmakingRequest) -> u64 {
+-    let fn_name = "slprs_mm_start";
++    with_returning::<SlippiEXIDevice, _, _>(exi_device_instance_ptr, |device| {
++        device.matchmaking.start(match_request(request))
++    })
++}
+ 
++fn match_request(request: SlippiMatchmakingRequest) -> MatchRequest {
+     let connect_code = if request.connect_code.is_null() || request.connect_code_len == 0 {
+         Vec::new()
+     } else {
+         unsafe { std::slice::from_raw_parts(request.connect_code, request.connect_code_len) }.to_vec()
+     };
+-    let lan_addr = c_str_to_string(request.lan_addr, fn_name, "lan_addr");
+-    let stun = [request.stun[0].to_addr(), request.stun[1].to_addr()];
+-
+-    with_returning::<SlippiEXIDevice, _, _>(exi_device_instance_ptr, move |device| {
+-        device.matchmaking.start(MatchRequest {
+-            mode: request.mode,
+-            connect_code,
+-            netplay_port: request.netplay_port,
+-            lan_addr,
+-            stun,
+-            debug: None,
+-        })
++    MatchRequest {
++        mode: request.mode,
++        connect_code,
++        netplay_port: request.netplay_port,
++        lan_addr: c_str_to_string(request.lan_addr, "slprs_mm_start", "lan_addr"),
++        stun: [request.stun[0].to_addr(), request.stun[1].to_addr()],
++        debug: None,
++    }
++}
++
++/// Creates an independent matchmaking client sharing the device's user identity.
++/// Dolphin serializes this call with other opaque EXI-device calls. Thereafter
++/// each handle is owned by one C++ matchmaking context and used by its worker;
++/// destruction happens only after that worker has joined.
++#[unsafe(no_mangle)]
++pub extern "C" fn slprs_mm_client_create(exi_device_instance_ptr: usize) -> usize {
++    with_returning::<SlippiEXIDevice, _, _>(exi_device_instance_ptr, |device| {
++        Box::into_raw(Box::new(device.matchmaking.independent())) as usize
+     })
+ }
+ 
++/// Destroys exactly this independent client; no other ticket is cancelled.
++#[unsafe(no_mangle)]
++pub extern "C" fn slprs_mm_client_destroy(client: usize) {
++    if client != 0 {
++        drop(unsafe { Box::from_raw(client as *mut MatchmakingClient) });
++    }
++}
++
++#[unsafe(no_mangle)]
++pub extern "C" fn slprs_mm_client_start(client: usize, request: SlippiMatchmakingRequest) -> u64 {
++    with_returning::<MatchmakingClient, _, _>(client, |mm| mm.start(match_request(request)))
++}
++
++#[unsafe(no_mangle)]
++pub extern "C" fn slprs_mm_client_state(client: usize) -> c_int {
++    with_returning::<MatchmakingClient, _, _>(client, |mm| mm.state() as c_int)
++}
++
++#[unsafe(no_mangle)]
++pub extern "C" fn slprs_mm_client_take_result_json(client: usize) -> *mut c_char {
++    with_returning::<MatchmakingClient, _, _>(client, |mm| {
++        mm.take_result_json()
++            .and_then(|json| CString::new(json).ok())
++            .map(CString::into_raw)
++            .unwrap_or(std::ptr::null_mut())
++    })
++}
++
++#[unsafe(no_mangle)]
++pub extern "C" fn slprs_mm_client_error_message(client: usize) -> *mut c_char {
++    with_returning::<MatchmakingClient, _, _>(client, |mm| {
++        CString::new(mm.error_message())
++            .map(CString::into_raw)
++            .unwrap_or(std::ptr::null_mut())
++    })
++}
++
++#[unsafe(no_mangle)]
++pub extern "C" fn slprs_mm_client_cancel(client: usize, session_id: u64) {
++    with::<MatchmakingClient, _>(client, |mm| mm.cancel_session(session_id));
++}
++
+ /// Current session state: 0 idle, 1 connecting, 2 queued, 3 matched, 4 failed.
+ #[unsafe(no_mangle)]
+ pub extern "C" fn slprs_mm_state(exi_device_instance_ptr: usize) -> c_int {
+diff --git a/matchmaking/src/client.rs b/matchmaking/src/client.rs
+index 32144ae..701b50b 100644
+--- a/matchmaking/src/client.rs
++++ b/matchmaking/src/client.rs
+@@ -161,6 +161,22 @@ impl MatchmakingClient {
+         }
+     }
+ 
++    /// Creates an independent queue using the same identity, version and endpoint.
++    /// The ticket, cancellation flag, result and worker are never shared. In
++    /// particular, equal session numbers on two clients refer to different queues.
++    pub fn independent(&self) -> Self {
++        Self {
++            user_manager: self.user_manager.clone(),
++            slippi_semver: self.slippi_semver.clone(),
++            url: self.url.clone(),
++            inner: Mutex::new(Inner {
++                shared: Arc::new(Shared::default()),
++                worker: None,
++                session_id: 0,
++            }),
++        }
++    }
++
+     /// The URL this client connects to.
+     pub fn url(&self) -> &str {
+         &self.url
+@@ -631,3 +647,149 @@ fn set_read_timeout(socket: &Socket, timeout: Duration) {
+ // `MaybeTlsStream` exposes.
+ #[allow(dead_code)]
+ fn _assert_stream_traits<S: Read + Write>() {}
++
++#[cfg(test)]
++mod parallel_tests {
++    use super::*;
++    use slippi_gg_api::APIClient;
++    use std::net::TcpListener;
++    use std::sync::mpsc;
++
++    fn client(url: String) -> MatchmakingClient {
++        // Synthetic identity only. This test never contacts the public service.
++        let dir = std::env::temp_dir().join(format!("pfq-mm-{}", std::process::id()));
++        let user = UserManager::new(APIClient::new("3.7.0"), dir, "3.7.0".into());
++        user.set(|u| {
++            u.uid = "test-pfq".into();
++            u.play_key = "test-only".into();
++        });
++        let mut client = MatchmakingClient::new(user, "3.7.0".into());
++        client.url = url;
++        client
++    }
++
++    fn wait(client: &MatchmakingClient, wanted: MatchmakingState) {
++        let start = Instant::now();
++        while client.state() != wanted {
++            assert_ne!(client.state(), MatchmakingState::Failed, "{}", client.error_message());
++            assert!(
++                start.elapsed() < Duration::from_secs(5),
++                "waiting for {wanted:?}, got {:?}",
++                client.state()
++            );
++            thread::sleep(Duration::from_millis(5));
++        }
++    }
++
++    #[test]
++    fn cancelling_or_dropping_an_independent_client_preserves_other_state() {
++        let base = client("ws://127.0.0.1:1/unused".into());
++        let teams = base.independent();
++        let singles = base.independent();
++        for mm in [&teams, &singles] {
++            let mut inner = mm.inner.lock().unwrap();
++            inner.session_id = 1;
++            inner.shared.set_state(MatchmakingState::Queued);
++        }
++        singles.cancel_session(1);
++        assert!(singles.inner.lock().unwrap().shared.cancelled());
++        assert!(!teams.inner.lock().unwrap().shared.cancelled());
++        drop(singles);
++        assert_eq!(teams.state(), MatchmakingState::Queued);
++        assert!(!teams.inner.lock().unwrap().shared.cancelled());
++        assert_eq!(base.state(), MatchmakingState::Idle);
++        // A stale generation cannot cancel a newer search on the same client.
++        teams.inner.lock().unwrap().session_id = 2;
++        teams.cancel_session(1);
++        assert!(!teams.inner.lock().unwrap().shared.cancelled());
++        teams.cancel_session(2);
++        assert!(teams.inner.lock().unwrap().shared.cancelled());
++    }
++
++    #[test]
++    fn two_websocket_queues_share_identity_but_not_cancel_or_match_results() {
++        for (keep_mode, cancel_mode) in [(3, 1), (1, 3)] {
++            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
++            let teams = client(format!("ws://{}/v1/queue", listener.local_addr().unwrap()));
++            let singles = teams.independent();
++            let (events_tx, events_rx) = mpsc::channel();
++            let (match_tx, match_rx) = mpsc::channel();
++            let server = thread::spawn(move || {
++                let mut workers = Vec::new();
++                let mut match_rx = Some(match_rx);
++                for _ in 0..2 {
++                    let (stream, _) = listener.accept().unwrap();
++                    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
++                    let tx = events_tx.clone();
++                    // The first connection is the queue that must survive cancellation.
++                    let trigger = match_rx.take();
++                    workers.push(thread::spawn(move || {
++                        let mut socket = tungstenite::accept(stream).unwrap();
++                        let join: serde_json::Value = serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
++                        tx.send(join.clone()).unwrap();
++                        socket
++                            .send(Message::text(
++                                r#"{"type":"joined","ticketId":"test-ticket","token":"test-token"}"#,
++                            ))
++                            .unwrap();
++                        if let Some(trigger) = trigger {
++                            trigger.recv_timeout(Duration::from_secs(5)).unwrap();
++                            socket
++                                .send(Message::text(
++                                    r#"{"type":"match","matchId":"mode.retained-test","isHost":true}"#,
++                                ))
++                                .unwrap();
++                        } else {
++                            loop {
++                                match socket.read().unwrap() {
++                                    Message::Text(text) if text.contains("cancel") => {
++                                        tx.send(serde_json::json!({"cancelled": 1})).unwrap();
++                                        break;
++                                    },
++                                    Message::Ping(_) => {
++                                        socket.flush().unwrap();
++                                    },
++                                    _ => {},
++                                }
++                            }
++                        }
++                    }));
++                }
++                for worker in workers {
++                    worker.join().unwrap();
++                }
++            });
++            let team_id = teams.start(MatchRequest {
++                mode: keep_mode,
++                netplay_port: 41000,
++                ..Default::default()
++            });
++            let team_join = events_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++            wait(&teams, MatchmakingState::Queued);
++            let single_id = singles.start(MatchRequest {
++                mode: cancel_mode,
++                netplay_port: 41001,
++                ..Default::default()
++            });
++            let single_join = events_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++            wait(&singles, MatchmakingState::Queued);
++            assert_eq!(team_join["user"], single_join["user"]);
++            assert_eq!(team_join["search"]["mode"], keep_mode);
++            assert_eq!(single_join["search"]["mode"], cancel_mode);
++            assert_ne!(team_join["port"], single_join["port"]);
++            // Both clients may use session 1: the handle, not that number, isolates them.
++            assert_eq!(team_id, single_id);
++            singles.cancel_session(single_id);
++            assert_eq!(events_rx.recv_timeout(Duration::from_secs(5)).unwrap()["cancelled"], 1);
++            wait(&singles, MatchmakingState::Idle);
++            assert_eq!(teams.state(), MatchmakingState::Queued);
++            assert!(teams.take_result_json().is_none());
++            drop(singles);
++            match_tx.send(()).unwrap();
++            wait(&teams, MatchmakingState::Matched);
++            assert!(teams.take_result_json().unwrap().contains("mode.retained-test"));
++            assert!(teams.take_result_json().is_none());
++            server.join().unwrap();
++        }
++    }
++}

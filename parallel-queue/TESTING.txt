@@ -1,54 +1,63 @@
-FIRST LIVE TEST — experimental one-window Teams priority
+SLIPPI 3.7.0 — EXPERIMENTAL SINGLE-WINDOW TEAMS PRIORITY
 
-This is a test build. Live Teams handoff has not been verified by its author.
-Use cooperative test opponents who expect the singles disconnect.
-There is one emulated game and one native controller path. No desktop helper,
-second instance, controller pipe, DTM startup recording or custom hotkey is used.
+Keep your normal Slippi Launcher installation and old test folder separate.
+This build needs its own NEW 3.7.0 EXE, DLLs and Sys folder together. Do not mix
+individual runtime files with the 3.6.4 test build. This is an experimental port;
+a live four-player takeover has not been verified. The previous intermittent
+menu disappearance / CPU synchronization crash is still unresolved.
 
-SETUP (once)
-1. Extract the whole test ZIP to a NEW folder. Do not replace Slippi Launcher's
-   Dolphin. Keep all included DLLs and the Sys folder together.
-2. Copy your existing Dolphin User folder into this test folder as "User".
-   It should contain Config and Slippi, with Slippi\user.json inside. A normal
-   Windows user folder is Documents\Dolphin Emulator. Keep that original intact.
-   Never share user.json. If the source folder is unclear, skip this copy and
-   log in once in the test build instead.
-3. Double-click Patch-Preflight.cmd. Choose your original working Preflight v1.1
-   ISO, then save a NEW ISO, e.g. Preflight-ParallelQueue-test.iso.
-   The original is preserved. The patcher rejects a different unsupported ISO.
-4. Launch the included Slippi Dolphin.exe and open the NEW patched ISO.
-   Its title includes [Teams Priority test]. Configure Port 1 to GameCube
-   Adapter for Wii U for your Phob/Lossless adapter, as in ordinary Slippi.
-   Set other ports normally for your setup. Only this one instance uses USB.
+INSTALL
+1. Extract this entire Windows test ZIP into a NEW folder.
+2. To preserve login/controller/replay settings: open the OLD test folder's
+   User folder. COPY its Config and Slippi folders into a User folder inside the
+   NEW test folder. Create that User folder if absent. GC can also be copied
+   for saves. Do not copy the old EXE, DLLs, Sys or User/GameSettings folder.
+   The new build should use its updated default game codes for this first test.
+   Never upload or share user.json.
+3. Launch the NEW Slippi Dolphin.exe. Its title must say 3.7.0 and include
+   [Teams Priority test]. Use File > Open and select your existing
+   Preflight-TeamsPriority-menu-fix-4.iso. Its adapter bytes are unchanged.
+   If you no longer have that ISO, run the included Patch-Preflight.cmd against
+   your ORIGINAL Aitch Preflight v1.1 ISO and save a new patched copy.
+4. Check Controllers > Port 1: GameCube Adapter for Wii U, for Phob/Lossless.
+   Check Config > Slippi: Save Slippi Replays, your normal replay folder, and
+   Save Replays to Monthly Subfolders. The copied Config normally retains these.
 
-TEST
-1. At Slippi's online character select, use L+R to enter Preflight as usual.
-2. Choose your character/stage and enter practice. Pause with Start.
-3. Use Preflight's existing Queue menu to search Teams with your usual code,
-   EC@918. Your teammate queues normally from their own computer.
-4. Open the new Play singles menu and select Unranked. Enter a singles game.
-   Direct is available for a separate test with a cooperative opponent.
-   For this first implementation, queue Teams BEFORE starting singles. Starting
-   a Teams search from inside an already-running singles match is not provided.
-5. When ALL Teams peers connect, singles should disconnect. Allow the ordinary
-   game-end/report/replay and character-select transitions to finish. Teams
-   should then load in that SAME Dolphin window using the saved Teams choices.
-   The singles game ends; it is not paused for later resumption.
+FIRST CHECK — NO MATCHMAKING
+1. At online character select, press and RELEASE L+R together.
+2. Choose a practice character and stage as usual.
+3. Once practice starts, press and RELEASE Start once.
+4. Confirm that the ordinary Preflight pause menu opens, including Play Singles.
+   If it crashes or stays black, stop here and report the visible error and
+   which step failed. This first check catches 3.7.0 game/asset compatibility.
 
-CHECK
-- Native Phob/Lossless inputs work before and after the transition.
-- Teams retains the intended code, character, color and team.
-- Cancelling singles does not cancel the waiting Teams search.
-- Cancel Teams in the new submenu cancels only the parked background search.
-- An assignment alone, or a failed Teams connection, does not interrupt singles.
+SOLO QUEUE CHECK — AFTER THE FIRST CHECK PASSES
+A confirms; B goes back a menu level; D-pad Up/Down moves the selection.
+1. In practice, Start > Queue > Queue Teams. Choose Green and confirm EC@918.
+   Your teammate does not need to search for this solo check.
+2. Open the practice menu again with Start if needed. B back to Queue.
+3. Choose Queue Direct and confirm a valid offline friend's connect code.
+   Reopen the practice menu if needed and return to Queue with B.
+4. Expected: both Queue Direct and Teams Background have green outlines.
+5. Select the already-green Direct option and press A ONCE. Expected: Direct
+   stops while Teams Background stays green. If practice resumes, Start reopens.
+6. Restart Direct against the same offline code. Return to Queue and select
+   Teams Background ONCE. Expected: Teams clears while Direct stays green.
+7. Stop the remaining Direct search by selecting its green option once.
+   No need to repeatedly press Cancel Teams or leave queues running overnight.
 
-If no Play singles row appears, verify BOTH the new ISO and the modified test
-Dolphin are in use. Stock Dolphin deliberately does not expose the new option.
-If takeover stalls, record the visible scene/mode and relevant SLIPPI_ONLINE log
-messages (especially [Parallel queue]). Do not share credentials or an unfiltered
-log containing account data. This first build does not automatically recover a
-failed Teams handoff or automatically start the next Teams search.
+LIVE TAKEOVER — WHEN YOUR TEAMMATE IS AVAILABLE
+1. Start Teams EC@918 in Preflight first. Have your teammate wait before queuing.
+2. Start Direct with a cooperative singles opponent, or Queue Unranked.
+3. While the singles game is running, have your teammate search EC@918.
+4. When ALL Teams peers connect, singles should end through the normal game-end
+   path and the same Dolphin window should enter Teams with the saved selections.
+5. Check character/color/team, Phob input and .slp files for both games.
 
-If Slippi says the ISO is invalid, a peer disconnects, or Teams fails to load,
-stop this test and report what happened. Return to your original Slippi/ISO by
-closing this build and opening Slippi Launcher normally.
+Green reflects the emulator's current search state; a real live Teams assignment
+and peer connection are still needed to prove public-service compatibility and
+the full transition. If Teams Failed appears, note the error and stop the test.
+Do not keep requeuing blindly. If the overlay disappears, note whether fighters
+keep moving or the whole game freezes and what you selected immediately before.
+Report relevant error text or a screenshot; do not send credentials or full
+account/debug dumps. No automatic requeue or failed-handoff recovery is provided.

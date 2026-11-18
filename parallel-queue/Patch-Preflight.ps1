@@ -35,6 +35,17 @@ function Apply-Recipe([byte[]]$Original,$Patch) {
         return ,$result
     } finally {$buffer.Dispose()}
 }
+function Align32([long]$Value) { return (($Value+31) -band ([long]-32)) }
+function Find-EmptyRegion([long]$Length,[long]$Minimum,[long]$DiscLength,$Ranges) {
+    [long]$candidate=Align32 $Minimum
+    foreach($range in ($Ranges | Sort-Object -Property Start,End)) {
+        if($range.End -le $candidate){continue}
+        if($candidate+$Length -le $range.Start){return $candidate}
+        $candidate=Align32 $range.End
+    }
+    if($candidate+$Length -le $DiscLength){return $candidate}
+    throw 'No verified free region is large enough for the updated module. No output was written.'
+}
 $temporary=''
 try {
     $patch=Get-Content -Raw -LiteralPath $DeltaPath | ConvertFrom-Json
@@ -78,7 +89,7 @@ try {
                 $directories.Add([pscustomobject]@{Path=($path+'/');End=$size})
             } elseif(($word -shr 24) -eq 0) {
                 if($offset+$size -gt $reader.BaseStream.Length){throw 'A disc file is outside the input.'}
-                $record=[pscustomobject]@{Path=$path;Offset=[long]$offset;Size=[int]$size;SizeField=([long]$fstOffset+$i*12+8)}
+                $record=[pscustomobject]@{Path=$path;Offset=[long]$offset;Size=[int]$size;SizeField=([long]$fstOffset+$i*12+8);OffsetField=([long]$fstOffset+$i*12+4)}
                 $allFiles.Add($record)
                 if($path -ceq 'tm.dat' -or $path -ceq 'other.dat' -or $path -ceq 'codes.gct') {
                     if($files.ContainsKey($path)){throw 'Duplicate module.'}
@@ -93,24 +104,45 @@ try {
         foreach($name in @('tm.dat','other.dat')) {
             $record=$files[$name]
             $prepared[$name]=Apply-Recipe (Read-At $reader $record.Offset $record.Size) $patch.Files.$name
-            [long]$limit=$reader.BaseStream.Length
             foreach($other in $allFiles) {
                 if($other.Path -ceq $name -or $other.Size -eq 0){continue}
                 if($other.Offset -lt $record.Offset+$record.Size -and $other.Offset+$other.Size -gt $record.Offset){throw 'Overlapping disc files.'}
-                if($other.Offset -ge $record.Offset){$limit=[Math]::Min($limit,$other.Offset)}
             }
             foreach($region in @(@($dolOffset,$dolSize),@($fstOffset,$fstSize))) {
                 if($region[0] -lt $record.Offset+$record.Size -and $region[0]+$region[1] -gt $record.Offset){throw 'Module overlaps executable or filesystem table.'}
-                if($region[0] -ge $record.Offset){$limit=[Math]::Min($limit,$region[0])}
             }
-            if($record.Offset+$prepared[$name].Length -gt $limit){throw "Not enough padding after $name. This disc layout is unsupported."}
+        }
+        # Prefer the original slot. If growth exceeds its padding, use a checked
+        # gap after the original slot and update the file's FST offset as well.
+        # Keep every original file range reserved, including the old module copy.
+        # The header/apploader/DOL/FST area is reserved as a complete prefix.
+        $reservedEnd=[Math]::Max($dolOffset+$dolSize,$fstOffset+$fstSize)
+        $placements=@{}
+        foreach($name in @('other.dat','tm.dat')) {
+            $record=$files[$name];[long]$length=$prepared[$name].Length
+            $ranges=New-Object 'Collections.Generic.List[object]'
+            $ranges.Add([pscustomobject]@{Start=0L;End=[long]$reservedEnd})
+            foreach($other in $allFiles) {
+                if($other.Path -ceq $name -or $other.Size -eq 0){continue}
+                $ranges.Add([pscustomobject]@{Start=$other.Offset;End=($other.Offset+$other.Size)})
+            }
+            foreach($placed in $placements.Keys) {
+                $ranges.Add([pscustomobject]@{Start=$placements[$placed];End=($placements[$placed]+$prepared[$placed].Length)})
+            }
+            $fits=$record.Offset+$length -le $reader.BaseStream.Length
+            foreach($range in $ranges) {
+                if($range.Start -lt $record.Offset+$length -and $range.End -gt $record.Offset){$fits=$false;break}
+            }
+            if($fits){$placements[$name]=[long]$record.Offset;continue}
+            $ranges.Add([pscustomobject]@{Start=$record.Offset;End=($record.Offset+$record.Size)})
+            $placements[$name]=Find-EmptyRegion $length $record.Offset $reader.BaseStream.Length $ranges
         }
     } finally {$reader.Dispose()}
     if([string]::IsNullOrWhiteSpace($OutputIso)) {
         Add-Type -AssemblyName System.Windows.Forms
         $dialog=New-Object System.Windows.Forms.SaveFileDialog
         $dialog.Title='Save a NEW experimental Preflight ISO';$dialog.Filter='GameCube ISO|*.iso'
-        $dialog.FileName='Preflight-ParallelQueue-test.iso';$dialog.OverwritePrompt=$true
+        $dialog.FileName='Preflight-TeamsPriority-3.7.0-test.iso';$dialog.OverwritePrompt=$true
         try {if($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK){exit 0};$OutputIso=$dialog.FileName}finally{$dialog.Dispose()}
     }
     $OutputIso=[IO.Path]::GetFullPath($OutputIso)
@@ -121,12 +153,13 @@ try {
     try {
         foreach($name in @('tm.dat','other.dat')) {
             $record=$files[$name];[byte[]]$bytes=$prepared[$name]
-            $stream.Position=$record.Offset;$stream.Write($bytes,0,$bytes.Length)
+            $stream.Position=$placements[$name];$stream.Write($bytes,0,$bytes.Length)
+            $offsetBytes=BE32 $placements[$name];$stream.Position=$record.OffsetField;$stream.Write($offsetBytes,0,4)
             $sizeBytes=BE32 $bytes.Length;$stream.Position=$record.SizeField;$stream.Write($sizeBytes,0,4)
         }
         $stream.Flush()
         foreach($name in @('tm.dat','other.dat')) {
-            $record=$files[$name];$stream.Position=$record.Offset;$bytes=New-Object byte[] $prepared[$name].Length
+            $record=$files[$name];$stream.Position=$placements[$name];$bytes=New-Object byte[] $prepared[$name].Length
             if($stream.Read($bytes,0,$bytes.Length) -ne $bytes.Length -or (Hash $bytes) -cne $patch.Files.$name.OutputSHA256){throw 'Output verification failed.'}
         }
     } finally {$stream.Dispose()}

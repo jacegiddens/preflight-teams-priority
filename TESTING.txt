@@ -1,0 +1,55 @@
+JACE TEAMS-AFTER-SINGLES DIAGNOSTIC — SLIPPI 3.7.0
+
+This is a one-account, one-window experiment, not a verified working dual-queue
+release. It tests one connected singles game plus one server Teams search.
+The public service rejected two overlapping searches in the previous build.
+
+USE THE MATCHING NEW EXE AND NEW ISO
+1. Keep your normal Launcher and old test folder intact. Extract the complete
+   new Windows artifact into a NEW folder; keep EXE, DLLs and Sys together.
+2. Copy Config and Slippi from the old test User folder into a User folder in
+   the new test directory. This preserves login, controller and replay settings.
+   Do not copy old EXEs, DLLs, Sys or User/GameSettings. Never share user.json.
+3. Run the NEW Patch-Preflight.cmd against your ORIGINAL Aitch Preflight v1.1 ISO.
+   Save Preflight-Jace-Teams-after-Singles-test.iso. Do not select a previously
+   patched ISO as the patcher's input. Existing output files are preserved.
+4. Run the NEW Slippi Dolphin.exe, whose title includes
+   [Jace Teams-after-Singles test], and open that NEW ISO. Do NOT reuse Menu Fix 4:
+   this test uses extended queue-state flags and removes its extra menu context.
+5. Keep Config > Interface > On-Screen Display Messages checked for the status.
+   Keep Slippi replay saving/monthly folders and Phob/GameCube Adapter as desired.
+
+FIRST OFFLINE CHECK
+L+R from online character select, choose practice characters/stage, then Start.
+The pause menu should have its ORIGINAL FIVE root entries: Queue, CPU Actions,
+CPU Delay, Frame Advance, Exit. There is no duplicate Play Singles submenu.
+If Preflight or its menu crashes, stop and report that first.
+
+ONE MATCH TEST
+1. Start > Queue > Queue Teams. Choose your intended color and confirm EC@918.
+2. EXPECT YELLOW: Teams Armed / Teams: ARMED - waiting for singles game.
+   This stores the Teams details ONLY. No Teams ticket has been sent yet.
+3. Use the normal Queue Unranked or Queue Direct option. A cooperative Direct
+   opponent is easiest for this diagnostic. Connect and start a singles game.
+4. At the start of the actual game, the mod sends the saved Teams request once.
+   EXPECT YELLOW: CONNECTING while awaiting the service.
+   EXPECT GREEN: SEARCHING - server accepted only after confirmed acceptance.
+   EXPECT RED: FAILED - reason if the service rejects it or a connection fails.
+   Yellow waiting/connecting never means a confirmed Teams queue.
+5. Keep playing briefly and record the status/error. Your teammate can remain
+   offline for the initial acceptance test. Stop if it turns red; no blind retries.
+6. With your teammate available, have them join the configured Teams code once
+   green. When all peers connect, the ordinary game-end path should end singles
+   and the same window should enter Teams. This full handoff is still unverified.
+7. Cancelling the highlighted Teams row in practice cancels only the Teams plan
+   or ticket. The original Direct/Unranked rows still toggle their own searches.
+
+This diagnostic does NOT implement automatic pause/resume of Teams while finding
+another singles opponent. If Teams has already started, cancel Teams before
+queueing a new singles opponent; the native code blocks a conflicting request.
+You can play subsequent games against the same connected singles opponent while
+Teams searches. Green alone does not prove a complete four-player handoff.
+
+If rejected, enable Info logging for Slippi Online and [Rust] Slippi Online, with
+Write to File. Report only the relevant error lines from User/Logs/dolphin.log.
+The intermittent UI/CPU stall remains unresolved; no fix is claimed by this test.

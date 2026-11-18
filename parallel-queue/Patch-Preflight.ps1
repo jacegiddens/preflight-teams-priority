@@ -101,7 +101,7 @@ try {
         foreach($name in @('tm.dat','other.dat','codes.gct')){if(-not $files.ContainsKey($name)){throw "Missing $name."}}
         $record=$files['codes.gct']
         if((Hash (Read-At $reader $record.Offset $record.Size)) -cne $patch.CodesSHA256){throw 'The loader codes do not match this patch.'}
-        foreach($name in @('tm.dat','other.dat')) {
+        foreach($name in @('tm.dat','other.dat','codes.gct')) {
             $record=$files[$name]
             $prepared[$name]=Apply-Recipe (Read-At $reader $record.Offset $record.Size) $patch.Files.$name
             foreach($other in $allFiles) {
@@ -118,7 +118,7 @@ try {
         # The header/apploader/DOL/FST area is reserved as a complete prefix.
         $reservedEnd=[Math]::Max($dolOffset+$dolSize,$fstOffset+$fstSize)
         $placements=@{}
-        foreach($name in @('other.dat','tm.dat')) {
+        foreach($name in @('codes.gct','other.dat','tm.dat')) {
             $record=$files[$name];[long]$length=$prepared[$name].Length
             $ranges=New-Object 'Collections.Generic.List[object]'
             $ranges.Add([pscustomobject]@{Start=0L;End=[long]$reservedEnd})
@@ -142,7 +142,7 @@ try {
         Add-Type -AssemblyName System.Windows.Forms
         $dialog=New-Object System.Windows.Forms.SaveFileDialog
         $dialog.Title='Save a NEW experimental Preflight ISO';$dialog.Filter='GameCube ISO|*.iso'
-        $dialog.FileName='Preflight-TeamsPriority-3.7.0-test.iso';$dialog.OverwritePrompt=$true
+        $dialog.FileName='Preflight-Jace-Teams-after-Singles-test.iso';$dialog.OverwritePrompt=$true
         try {if($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK){exit 0};$OutputIso=$dialog.FileName}finally{$dialog.Dispose()}
     }
     $OutputIso=[IO.Path]::GetFullPath($OutputIso)
@@ -151,14 +151,14 @@ try {
     [IO.File]::Copy($IsoPath,$temporary,$false)
     $stream=[IO.File]::Open($temporary,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
     try {
-        foreach($name in @('tm.dat','other.dat')) {
+        foreach($name in @('tm.dat','other.dat','codes.gct')) {
             $record=$files[$name];[byte[]]$bytes=$prepared[$name]
             $stream.Position=$placements[$name];$stream.Write($bytes,0,$bytes.Length)
             $offsetBytes=BE32 $placements[$name];$stream.Position=$record.OffsetField;$stream.Write($offsetBytes,0,4)
             $sizeBytes=BE32 $bytes.Length;$stream.Position=$record.SizeField;$stream.Write($sizeBytes,0,4)
         }
         $stream.Flush()
-        foreach($name in @('tm.dat','other.dat')) {
+        foreach($name in @('tm.dat','other.dat','codes.gct')) {
             $record=$files[$name];$stream.Position=$placements[$name];$bytes=New-Object byte[] $prepared[$name].Length
             if($stream.Read($bytes,0,$bytes.Length) -ne $bytes.Length -or (Hash $bytes) -cne $patch.Files.$name.OutputSHA256){throw 'Output verification failed.'}
         }

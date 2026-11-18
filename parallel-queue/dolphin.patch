@@ -218,152 +218,159 @@ index 0000000..21200d7
 +          if-no-files-found: ignore
 diff --git a/Development/SingleInstance/BuildKit/README.md b/Development/SingleInstance/BuildKit/README.md
 new file mode 100644
-index 0000000..bc0af68
+index 0000000..d747001
 --- /dev/null
 +++ b/Development/SingleInstance/BuildKit/README.md
-@@ -0,0 +1,73 @@
-+# Teams Priority — Slippi 3.7.0 Windows build update
+@@ -0,0 +1,88 @@
++# Jace Teams-after-Singles diagnostic — Slippi 3.7.0
 +
-+This kit updates the existing `jacegiddens/preflight-teams-priority` build project.
-+It contains reviewed C++/Rust source patches and the same Menu Fix 4 ISO recipe.
-+It is NOT an already-built Windows executable. GitHub's Windows runner builds it.
-+No ISO, original game modules, account file or credentials are included.
++This source/update kit tests **one connected singles game plus one Teams search**
++using one account and one Dolphin window. GitHub's Windows runner builds the EXE
++and Rust DLL. This ZIP is not a Windows executable; no ISO or login is included.
 +
-+## Update the existing GitHub project
++The previous live log showed `You queued from another client` when two searches
++overlapped. This diagnostic instead stores Teams locally, connects singles first,
++and sends the Teams request only when actual singles gameplay begins. It does
++not yet establish that the service accepts this different sequence.
 +
-+1. First replace `.github/workflows/windows-test.yml` with the contents of the
-+   visible `windows-test.yml` supplied at the top of this kit. Use GitHub's pencil
-+   editor, select the whole existing file, paste the new contents, and commit.
-+   Direct editor: https://github.com/jacegiddens/preflight-teams-priority/edit/main/.github/workflows/windows-test.yml
-+   This version runs manually, so this first commit does not start a build.
-+2. In the repository's **Code** tab, open the existing `parallel-queue` folder.
-+   Choose **Add file > Upload files**. Open the kit's `parallel-queue` folder on
-+   your PC and upload ALL FILES INSIDE IT. Do not upload the ZIP itself or put
-+   a second parallel-queue folder inside the existing one. Commit the upload.
++## Update your existing GitHub project
++
++Your repository already has the correct 3.7.0 workflow. **Do not edit it again.**
++
++1. Extract this kit. In your existing repository open **Code > parallel-queue**:
++   https://github.com/jacegiddens/preflight-teams-priority/tree/main/parallel-queue
++2. Choose **Add file > Upload files**. Upload ALL FILES INSIDE this kit's
++   `parallel-queue` folder, replacing those files. Commit the upload. Upload the
++   files themselves; do not nest another folder or upload this ZIP.
 +3. Open **Actions > Build Windows Teams Priority 3.7.0 test > Run workflow**.
 +   Choose `main`, then click the green Run workflow button.
-+4. After a green run, open its summary and download the artifact named
-+   **Slippi-Teams-Priority-3.7.0-test**. Extract the artifact wrapper, then extract
-+   the Windows test ZIP inside. Follow its `TESTING.txt`.
++4. After the run is green, download **Slippi-Teams-Priority-3.7.0-test** from its
++   Artifacts section. Extract the wrapper, then the Windows ZIP inside it into
++   a NEW folder. Follow its included `TESTING.txt` step by step.
 +
-+A failed run is not a playable build. Share its URL/error text for diagnosis.
-+Do not upload a Melee ISO, User folder, user.json, or any existing Dolphin binary.
-+Normal Slippi Launcher stays separate; do not replace its managed installation.
++A new matching ISO is required. Run the NEW patcher against the ORIGINAL working
++Aitch Preflight v1.1 ISO. Save `Preflight-Jace-Teams-after-Singles-test.iso`.
++Do not reuse Menu Fix 4 or overwrite the original ISO. The executable title must
++include `[Jace Teams-after-Singles test]`. Keep EXE, DLLs and Sys together.
++The normal Launcher installation remains separate. Never upload User/user.json.
 +
-+## What changed
++## What this test displays
 +
-+Slippi 3.7.0 puts matchmaking in a Rust WebSocket client whose default behavior
-+cancels the preceding search. This port gives each C++ context its own Rust client
-+handle. Both use the same account and normal 3.7.0 protocol, with independent
-+session IDs, tickets, results and cancellation. No server validation is bypassed.
-+Adapter reports and late remote input/suggestion packets affect only the active
-+foreground client; a standby Teams connection cannot reset its input tracker.
-+The new upstream input suggestions, replay fields and other 3.7.0 changes remain.
++- Yellow ARMED: Teams configured locally; no search has been sent.
++- Yellow CONNECTING: request started, awaiting the server's acceptance.
++- Green SEARCHING: server confirmed the Teams queue.
++- Green READY: all required peer connections established.
++- Red FAILED: displays the actual failure reason.
 +
-+The original Queue buttons and Play Singles alias retain the Menu Fix 4 behavior.
-+You can select the existing menu-fix-4.iso in the new build. The game adapter's
-+private protocol and patched module bytes are unchanged. The included patcher
-+can generate that adapter from an exact original Aitch Preflight v1.1 ISO if needed.
++Status refreshes during singles gameplay through Dolphin's on-screen messages;
++leave Config > Interface > On-Screen Display Messages enabled. Green is evidence
++of acceptance, not proof of a completed four-player handoff.
 +
-+## Validation and limits
++The original five root menu rows and standard Queue Unranked/Direct/Teams remain.
++The duplicate Play Singles context is removed. Teams starts only after the singles
++game begins. Cancel Teams before searching for a NEW singles opponent in this
++one-game diagnostic; automatic safe pause/resume across new opponents is not
++implemented. Same-opponent singles rematches can retain the Teams search.
 +
-+- Nine Rust matchmaking unit tests passed, including two actual loopback
-+  WebSocket searches on one synthetic identity, cancelling either mode while
-+  preserving the other, then receiving the surviving match result.
-+- All 116 C/C++ ownership/protocol/barrier/access checks passed.
-+- Five native C++ translation units compiled against the actual 3.7.0 headers.
-+- Rust check and a Linux shared-library build passed; all seven new FFI symbols
-+  were verified in that linked library. This is NOT a Windows DLL build.
-+- 180 compiled PPC adapter checks and 2,640 original-menu-navigation checks
-+  passed. SDK/rendering/matchmaking are mocked in those game-code checks.
++The Training description reads:
 +
-+The Windows workflow and a live four-player handoff still need to run. A local
-+mock does not prove that the new public service accepts both queues for the same
-+account. The earlier intermittent menu disappearance/crash is still unresolved.
++    Play Unranked or Direct while queuing for doubles! by Jace
++    Originally by Aitch
 +
-+## Exact corresponding source
++The original menu artwork is unchanged. Only the caption's loader hook and the
++two game modules are patched by checksum-bound COPY/DATA recipes.
 +
-+`parallel-queue/dolphin.patch`: project-slippi/Ishiiruka at
++## Server evidence and remaining limits
++
++Official documentation says the matchmaking server source is private:
++https://github.com/project-slippi/slippi-wiki/blob/master/GETTING_STARTED.md
++The client source is public. The earlier live error establishes eviction of an
++earlier same-account search; it does not prove a prohibition on a search during
++an existing peer-to-peer game or establish Slippi's intent toward this feature.
++
++Local checks passed: 97 queue/gating checks, 14 C/host protocol checks, 17 session
++barrier checks, 182 compiled PPC adapter checks, 621 DMA/transfer checks, 5,943
++original-menu navigation checks, native translation-unit compilation, actual DOL
++SIS/caption execution and end-to-end PowerShell synthetic-disc patching. Previous
++Rust independent-client tests also pass against a loopback service; that service
++does not model public account policy. Game SDK/rendering are mocked in PPC menu
++checks. No live Windows/public-service acceptance or four-player handoff is
++claimed. The intermittent UI/CPU stall remains unresolved; this removes the extra
++menu context but is not a verified crash fix.
++
++## Corresponding source and credits
++
++Dolphin base: project-slippi/Ishiiruka at
 +`07b2d287a1f074942811d13b3c990fa29401ba7c` (v3.7.0).
++Rust base: project-slippi/slippi-rust-extensions at
++`934f373d3cbcbca9ea3ceb68b53bda875c96abfb`.
 +
-+`parallel-queue/rust.patch`: project-slippi/slippi-rust-extensions at
-+`934f373d3cbcbca9ea3ceb68b53bda875c96abfb` (the submodule pinned by v3.7.0).
-+The workflow checks these bases, applies both patches, runs tests, builds the
-+Windows EXE/DLL, and packages the matching 3.7.0 Sys files and source patches.
-+The old 3.6.4 Windows binary cannot use this new Rust DLL interchangeably.
-+
-+Aitch created Preflight; this is an independent experimental integration.
-+Licenses are included for Dolphin and the Rust code. Neither project endorses
-+this test build.
++The included native and Rust patches reproduce the exact tested source on those
++bases. The unchanged workflow builds the EXE, DLL and matching Sys, then includes
++the source patches and licenses. The kit contains no original game code/assets,
++account file or binary. Aitch created Preflight; this is an independent Jace
++Teams-priority integration. Existing source credits and licenses are retained.
 diff --git a/Development/SingleInstance/BuildKit/TESTING.txt b/Development/SingleInstance/BuildKit/TESTING.txt
 new file mode 100644
-index 0000000..9436be3
+index 0000000..eb34bfa
 --- /dev/null
 +++ b/Development/SingleInstance/BuildKit/TESTING.txt
-@@ -0,0 +1,63 @@
-+SLIPPI 3.7.0 — EXPERIMENTAL SINGLE-WINDOW TEAMS PRIORITY
+@@ -0,0 +1,55 @@
++JACE TEAMS-AFTER-SINGLES DIAGNOSTIC — SLIPPI 3.7.0
 +
-+Keep your normal Slippi Launcher installation and old test folder separate.
-+This build needs its own NEW 3.7.0 EXE, DLLs and Sys folder together. Do not mix
-+individual runtime files with the 3.6.4 test build. This is an experimental port;
-+a live four-player takeover has not been verified. The previous intermittent
-+menu disappearance / CPU synchronization crash is still unresolved.
++This is a one-account, one-window experiment, not a verified working dual-queue
++release. It tests one connected singles game plus one server Teams search.
++The public service rejected two overlapping searches in the previous build.
 +
-+INSTALL
-+1. Extract this entire Windows test ZIP into a NEW folder.
-+2. To preserve login/controller/replay settings: open the OLD test folder's
-+   User folder. COPY its Config and Slippi folders into a User folder inside the
-+   NEW test folder. Create that User folder if absent. GC can also be copied
-+   for saves. Do not copy the old EXE, DLLs, Sys or User/GameSettings folder.
-+   The new build should use its updated default game codes for this first test.
-+   Never upload or share user.json.
-+3. Launch the NEW Slippi Dolphin.exe. Its title must say 3.7.0 and include
-+   [Teams Priority test]. Use File > Open and select your existing
-+   Preflight-TeamsPriority-menu-fix-4.iso. Its adapter bytes are unchanged.
-+   If you no longer have that ISO, run the included Patch-Preflight.cmd against
-+   your ORIGINAL Aitch Preflight v1.1 ISO and save a new patched copy.
-+4. Check Controllers > Port 1: GameCube Adapter for Wii U, for Phob/Lossless.
-+   Check Config > Slippi: Save Slippi Replays, your normal replay folder, and
-+   Save Replays to Monthly Subfolders. The copied Config normally retains these.
++USE THE MATCHING NEW EXE AND NEW ISO
++1. Keep your normal Launcher and old test folder intact. Extract the complete
++   new Windows artifact into a NEW folder; keep EXE, DLLs and Sys together.
++2. Copy Config and Slippi from the old test User folder into a User folder in
++   the new test directory. This preserves login, controller and replay settings.
++   Do not copy old EXEs, DLLs, Sys or User/GameSettings. Never share user.json.
++3. Run the NEW Patch-Preflight.cmd against your ORIGINAL Aitch Preflight v1.1 ISO.
++   Save Preflight-Jace-Teams-after-Singles-test.iso. Do not select a previously
++   patched ISO as the patcher's input. Existing output files are preserved.
++4. Run the NEW Slippi Dolphin.exe, whose title includes
++   [Jace Teams-after-Singles test], and open that NEW ISO. Do NOT reuse Menu Fix 4:
++   this test uses extended queue-state flags and removes its extra menu context.
++5. Keep Config > Interface > On-Screen Display Messages checked for the status.
++   Keep Slippi replay saving/monthly folders and Phob/GameCube Adapter as desired.
 +
-+FIRST CHECK — NO MATCHMAKING
-+1. At online character select, press and RELEASE L+R together.
-+2. Choose a practice character and stage as usual.
-+3. Once practice starts, press and RELEASE Start once.
-+4. Confirm that the ordinary Preflight pause menu opens, including Play Singles.
-+   If it crashes or stays black, stop here and report the visible error and
-+   which step failed. This first check catches 3.7.0 game/asset compatibility.
++FIRST OFFLINE CHECK
++L+R from online character select, choose practice characters/stage, then Start.
++The pause menu should have its ORIGINAL FIVE root entries: Queue, CPU Actions,
++CPU Delay, Frame Advance, Exit. There is no duplicate Play Singles submenu.
++If Preflight or its menu crashes, stop and report that first.
 +
-+SOLO QUEUE CHECK — AFTER THE FIRST CHECK PASSES
-+A confirms; B goes back a menu level; D-pad Up/Down moves the selection.
-+1. In practice, Start > Queue > Queue Teams. Choose Green and confirm EC@918.
-+   Your teammate does not need to search for this solo check.
-+2. Open the practice menu again with Start if needed. B back to Queue.
-+3. Choose Queue Direct and confirm a valid offline friend's connect code.
-+   Reopen the practice menu if needed and return to Queue with B.
-+4. Expected: both Queue Direct and Teams Background have green outlines.
-+5. Select the already-green Direct option and press A ONCE. Expected: Direct
-+   stops while Teams Background stays green. If practice resumes, Start reopens.
-+6. Restart Direct against the same offline code. Return to Queue and select
-+   Teams Background ONCE. Expected: Teams clears while Direct stays green.
-+7. Stop the remaining Direct search by selecting its green option once.
-+   No need to repeatedly press Cancel Teams or leave queues running overnight.
++ONE MATCH TEST
++1. Start > Queue > Queue Teams. Choose your intended color and confirm EC@918.
++2. EXPECT YELLOW: Teams Armed / Teams: ARMED - waiting for singles game.
++   This stores the Teams details ONLY. No Teams ticket has been sent yet.
++3. Use the normal Queue Unranked or Queue Direct option. A cooperative Direct
++   opponent is easiest for this diagnostic. Connect and start a singles game.
++4. At the start of the actual game, the mod sends the saved Teams request once.
++   EXPECT YELLOW: CONNECTING while awaiting the service.
++   EXPECT GREEN: SEARCHING - server accepted only after confirmed acceptance.
++   EXPECT RED: FAILED - reason if the service rejects it or a connection fails.
++   Yellow waiting/connecting never means a confirmed Teams queue.
++5. Keep playing briefly and record the status/error. Your teammate can remain
++   offline for the initial acceptance test. Stop if it turns red; no blind retries.
++6. With your teammate available, have them join the configured Teams code once
++   green. When all peers connect, the ordinary game-end path should end singles
++   and the same window should enter Teams. This full handoff is still unverified.
++7. Cancelling the highlighted Teams row in practice cancels only the Teams plan
++   or ticket. The original Direct/Unranked rows still toggle their own searches.
 +
-+LIVE TAKEOVER — WHEN YOUR TEAMMATE IS AVAILABLE
-+1. Start Teams EC@918 in Preflight first. Have your teammate wait before queuing.
-+2. Start Direct with a cooperative singles opponent, or Queue Unranked.
-+3. While the singles game is running, have your teammate search EC@918.
-+4. When ALL Teams peers connect, singles should end through the normal game-end
-+   path and the same Dolphin window should enter Teams with the saved selections.
-+5. Check character/color/team, Phob input and .slp files for both games.
++This diagnostic does NOT implement automatic pause/resume of Teams while finding
++another singles opponent. If Teams has already started, cancel Teams before
++queueing a new singles opponent; the native code blocks a conflicting request.
++You can play subsequent games against the same connected singles opponent while
++Teams searches. Green alone does not prove a complete four-player handoff.
 +
-+Green reflects the emulator's current search state; a real live Teams assignment
-+and peer connection are still needed to prove public-service compatibility and
-+the full transition. If Teams Failed appears, note the error and stop the test.
-+Do not keep requeuing blindly. If the overlay disappears, note whether fighters
-+keep moving or the whole game freezes and what you selected immediately before.
-+Report relevant error text or a screenshot; do not send credentials or full
-+account/debug dumps. No automatic requeue or failed-handoff recovery is provided.
++If rejected, enable Info logging for Slippi Online and [Rust] Slippi Online, with
++Write to File. Report only the relevant error lines from User/Logs/dolphin.log.
++The intermittent UI/CPU stall remains unresolved; no fix is claimed by this test.
 diff --git a/Development/SingleInstance/Game/ppc_restore.S b/Development/SingleInstance/Game/ppc_restore.S
 new file mode 100644
 index 0000000..0663a91
@@ -402,10 +409,10 @@ index 0000000..0663a91
 +.section .note.GNU-stack,"",@progbits
 diff --git a/Development/SingleInstance/Game/preflight_hooks.c b/Development/SingleInstance/Game/preflight_hooks.c
 new file mode 100644
-index 0000000..a9d03d0
+index 0000000..8fc2358
 --- /dev/null
 +++ b/Development/SingleInstance/Game/preflight_hooks.c
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,171 @@
 +/* Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+.
 + * Adapter for the exact supplied Preflight v1.1 modules. The patch builder
 + * resolves these imports using verified module offsets, never a runtime base.
@@ -453,9 +460,13 @@ index 0000000..a9d03d0
 +        displayed_background = 1;
 +        row->state = 1;
 +        row->name = (reply.flags & 4) ? "Teams Failed" :
-+                    (reply.flags & 2) ? "Teams Ready" : "Teams Background";
-+        row->colors[0] = (reply.flags & 4) ? 0x643232c8u : 0x324632c8u;
-+        row->colors[1] = (reply.flags & 4) ? 0xff5050ffu : 0x50ff46ffu;
++                    (reply.flags & 2) ? "Teams Ready" :
++                    (reply.flags & 8) ? "Teams Armed" :
++                    (reply.flags & 16) ? "Teams Searching" : "Teams Starting";
++        row->colors[0] = (reply.flags & 4) ? 0x643232c8u :
++                         (reply.flags & 18) ? 0x324632c8u : 0x645432c8u;
++        row->colors[1] = (reply.flags & 4) ? 0xff5050ffu :
++                         (reply.flags & 18) ? 0x50ff46ffu : 0xffce46ffu;
 +        row->colors[2] = 0;
 +    } else if (displayed_background) {
 +        displayed_background = 0;
@@ -465,8 +476,7 @@ index 0000000..a9d03d0
 +    }
 +}
 +extern uint32_t root_row_count, queue_counter;
-+extern uint8_t exit_to_slippi, singles_context[];
-+extern void *menu_head;
++extern uint8_t exit_to_slippi;
 +
 +static void leave_practice(void)
 +{
@@ -481,10 +491,8 @@ index 0000000..a9d03d0
 +    Original_Entry();
 +    if (scene_info[0] != 0x1c || scene_info[3] != 2) return;
 +    displayed_background = 0;
-+    *(void **)singles_context = menu_head;
-+    menu_head = singles_context;
 +    probe();
-+    root_row_count = client.available ? 6 : 5;
++    root_row_count = 5;
 +    if (client.available) sync_teams_indicator();
 +}
 +void PFQ_PlaySingles(MenuRow *row)
@@ -492,13 +500,7 @@ index 0000000..a9d03d0
 +    MenuRow *canonical = row->argument == 1 ? &queue_unranked_row : &queue_direct_row;
 +    if (query() == PFQ_OK) {
 +        if (ready()) { leave_practice(); return; }
-+        /* Intercept the ordinary Queue Unranked/Direct entries too. Park only
-+           when the foreground is Teams; otherwise retain ordinary solo use. */
-+        if (!(reply.flags & 1) && reply.foreground_mode == 3 &&
-+            PFQ_Call(&client, PFQ_PARK_TEAMS, 0, &reply) != PFQ_OK) {
-+            row->value = "Please wait";
-+            return;
-+        }
++
 +    }
 +    row->value = 0;
 +    canonical->value = 0;
@@ -584,10 +586,10 @@ index 0000000..a9d03d0
 +#endif
 diff --git a/Development/SingleInstance/Game/queue_client.c b/Development/SingleInstance/Game/queue_client.c
 new file mode 100644
-index 0000000..0ab8679
+index 0000000..e861e42
 --- /dev/null
 +++ b/Development/SingleInstance/Game/queue_client.c
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,82 @@
 +/* Copyright 2026 Dolphin Emulator Project. Licensed under GPLv2+. */
 +#include "queue_client.h"
 +
@@ -628,8 +630,9 @@ index 0000000..0ab8679
 +    client->transfer(tx, 13, 1);
 +    client->transfer(rx, 16, 0);
 +    if (rx[0] != 'P' || rx[1] != 'F' || rx[2] != 'D' || rx[3] != 'Q' || rx[4] != 1 ||
-+        (read32(rx + 12) & 15) != 15 || rx[5] > 10 || (rx[6] & 248) != 0 ||
-+        ((rx[6] & 6) != 0 && (rx[6] & 1) == 0) || (rx[6] & 6) == 6 ||
++        (read32(rx + 12) & 31) != 31 || rx[5] > 10 || (rx[6] & 224) != 0 ||
++        ((rx[6] & 30) != 0 && (rx[6] & 1) == 0) ||
++        ((rx[6] & 30) != 0 && ((rx[6] & 30) & ((rx[6] & 30) - 1)) != 0) ||
 +        (rx[7] > 4 && rx[7] != 255))
 +    {
 +        client->available = 0;
@@ -703,7 +706,7 @@ index 0000000..db2887e
 +#endif
 diff --git a/Development/SingleInstance/GameClientTest.cpp b/Development/SingleInstance/GameClientTest.cpp
 new file mode 100644
-index 0000000..ab4028c
+index 0000000..76bae44
 --- /dev/null
 +++ b/Development/SingleInstance/GameClientTest.cpp
 @@ -0,0 +1,69 @@
@@ -762,7 +765,7 @@ index 0000000..ab4028c
 +  stock=true;Check(PFQ_Probe(&client,&reply)==PFQ_UNAVAILABLE&&!client.available,"stock/no-capability host disables extension");
 +  Check(reply.flags==0&&reply.generation==0,"failed probe clears stale ready status");
 +  int before=writes;Check(PFQ_Call(&client,PFQ_PARK_TEAMS,0,&reply)==PFQ_UNAVAILABLE&&writes==before,"failed probe cannot fall through to park");
-+  stock=false;Check(PFQ_Probe(&client,&reply)==PFQ_OK&&client.available&&reply.capabilities==15,"C game client discovers C++ host capabilities");
++  stock=false;Check(PFQ_Probe(&client,&reply)==PFQ_OK&&client.available&&reply.capabilities==31,"C game client discovers C++ host capabilities");
 +  Check(PFQ_Call(&client,PFQ_PARK_TEAMS,0,&reply)==PFQ_OK&&backend.present&&reply.generation!=0,"cross-language park and generation decoding");
 +  auto generation=reply.generation;
 +  PFQ_CleanupForeground(&client);
@@ -908,10 +911,10 @@ index 0000000..9e7aba6
 +subfolder preference, not a demonstrated writer failure.
 diff --git a/Development/SingleInstance/QueueControlTest.cpp b/Development/SingleInstance/QueueControlTest.cpp
 new file mode 100644
-index 0000000..263092c
+index 0000000..f5580ed
 --- /dev/null
 +++ b/Development/SingleInstance/QueueControlTest.cpp
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,123 @@
 +// Copyright 2026 Dolphin Emulator Project
 +// Licensed under GPLv2+
 +// Refer to the license.txt file included.
@@ -925,6 +928,7 @@ index 0000000..263092c
 +struct FakeBackend : Control::Backend
 +{
 +  Control::Mode mode = Control::Mode::Teams;
++  bool waiting = false, searching = false;
 +  bool busy = false, parkable = true, parked = false, ready = false, failed = false;
 +  int foreground_identity = 100, teams_identity = 0;
 +  int parks = 0, activations = 0, cancellations = 0;
@@ -934,6 +938,8 @@ index 0000000..263092c
 +  bool HasTeams() const override { return parked; }
 +  bool TeamsReady() const override { return ready && !failed; }
 +  bool TeamsFailed() const override { return failed; }
++  bool TeamsWaiting() const override { return waiting; }
++  bool TeamsSearching() const override { return searching; }
 +  void ParkTeams() override { teams_identity = foreground_identity; foreground_identity = 200; mode = Control::Mode::None; parked = true; ++parks; }
 +  void ActivateTeams() override { foreground_identity = teams_identity; teams_identity = 0; parked = false; mode = Control::Mode::Teams; ++activations; }
 +  void CancelTeams() override { teams_identity = 0; parked = false; ++cancellations; }
@@ -960,9 +966,29 @@ index 0000000..263092c
 +        Check(Control::ShouldYieldToTeams(static_cast<Control::Mode>(mode), connected, ready) ==
 +              ((mode == 1 || mode == 2) && connected && ready),
 +              "only connected Direct/Unranked yield to connected Teams");
++  for (auto mode : {Control::Mode::Ranked, Control::Mode::Unranked, Control::Mode::Direct,
++                    Control::Mode::Teams, Control::Mode::None})
++    for (bool connected : {false,true})
++      for (bool started : {false,true})
++        Check(Control::CanStartDeferred(mode,connected,started) ==
++              ((mode==Control::Mode::Unranked || mode==Control::Mode::Direct) && connected && started),
++              "deferred search requires an actual connected singles game; never Ranked/Teams");
++  { Control staged; FakeBackend state; state.parked=true; staged.TeamsChanged();
++    state.waiting=true;
++    auto armed=Call(staged,state,Op::Status);
++    Check(armed[6]==9 && Token(armed)!=0,"locally armed queue has a cancellation token and only waiting flag");
++    state.waiting=false;
++    Check(Call(staged,state,Op::Status)[6]==1,"connecting is not reported as server-confirmed searching");
++    state.searching=true;
++    Check(Call(staged,state,Op::Status)[6]==17,"searching flag requires explicit confirmation");
++    state.failed=true;
++    Check(Call(staged,state,Op::Status)[6]==5,"failure suppresses stale searching state");
++    auto token=Token(armed); staged.TeamsChanged();
++    Check(Status(Call(staged,state,Op::CancelTeams,token))==Result::StaleGeneration,"old UI event cannot cancel a new configuration");
++  }
 +  Control c; FakeBackend b;
 +  auto r = Call(c,b,Op::Capabilities);
-+  Check(r[0]=='P' && r[3]=='Q' && r[4]==1 && r[15]==15, "explicit version/capability reply");
++  Check(r[0]=='P' && r[3]=='Q' && r[4]==1 && r[15]==31, "explicit version/capability reply");
 +  Check(b.parks==0 && b.activations==0 && b.cancellations==0, "discovery does not mutate sessions");
 +  for (std::size_t size = 0; size < 20; ++size)
 +  {
@@ -1014,10 +1040,10 @@ index 0000000..263092c
 +}
 diff --git a/Development/SingleInstance/README.md b/Development/SingleInstance/README.md
 new file mode 100644
-index 0000000..ade92f2
+index 0000000..1736332
 --- /dev/null
 +++ b/Development/SingleInstance/README.md
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,260 @@
 +# Singles while Teams searches — one Dolphin instance
 +
 +Experimental implementation, ported 2026-11-17. Target: Windows 11, Slippi 3.7.0,
@@ -1234,6 +1260,118 @@ index 0000000..ade92f2
 +hardware timing still require live testing. The earlier intermittent UI/CPU stall
 +is not claimed fixed by this migration. The old 3.6.4 build remains separately
 +preserved. See BuildKit/README.md for the existing-repository Windows build step.
++
++## Live 3.7.0 result: same-account search rejected
++
++The user's Windows build succeeded, Preflight menus opened, and an actual
++Unranked connection/game ran. Their supplied Slippi Online/Rust Online log then
++established why the retained Teams row turned red. The relevant elapsed-log
++sequence (account IDs, ticket IDs and addresses omitted) was:
++
++- 02:00.887: first search started; its ticket was accepted at 02:01.198.
++- 02:03.621: Teams was parked and the foreground search started.
++- 02:04.070: Rust logged `You queued from another client`.
++- 02:04.072: the newer ticket was accepted.
++- 02:04.146: the C++ matchmaking path received that server error.
++- 02:04.305 onward: Unranked matched/connected; game input began at 02:08.226.
++
++Thus Teams failed when the second search started, before the Unranked game,
++although the user noticed the red menu row after returning to practice. This
++is observed live service eviction of the earlier same-account search; it is not
++evidence of a game-end cleanup failure or a timeout in this trace. The error
++indicator correctly stopped describing that search as healthy.
++
++The independent Rust handles and loopback tests establish client-side isolation,
++but the mock server did not enforce this live account/session policy. The
++same-account design cannot be considered functional on the 3.7.0 service from
++these results. Further identical matchmaking tests are unnecessary. A supported
++multi-search service flow, or a design using separately authenticated legitimate
++accounts that the service accepts, needs investigation before another live build
++is warranted. No server checks or account identities have been bypassed.
++The earlier intermittent UI/CPU-stall report remains a separate unresolved issue.
++
++## Current deferred-search diagnostic source
++
++See Research/Server-and-Deferred-Test.md for the official public-source findings,
++new state flags, post-connection gate and validation. Teams is now configured
++locally and only requested after actual singles gameplay begins. Green means
++server-confirmed queued status, not merely an allocated local object. The
++original five-row menu is restored and the duplicate Play Singles context removed.
++The new window title identifies this diagnostic, and a new matching ISO is
++required; the earlier Menu Fix 4 ISO is not this test. Source and compiled game modules are prepared. The requested English caption
++and “Originally by Aitch” credit are implemented in the original loader's SIS hook;
++MnMaAll.usd remains untouched. The updated ISO recipe patches the two game modules
++and only that loader caption. Local PPC/SIS and end-to-end patcher checks passed.
++The Windows source/update kit uses the existing 3.7.0 GitHub workflow. Windows CI
++and the public-service test still need to run; no live success is claimed.
+diff --git a/Development/SingleInstance/Research/Server-and-Deferred-Test.md b/Development/SingleInstance/Research/Server-and-Deferred-Test.md
+new file mode 100644
+index 0000000..430c060
+--- /dev/null
++++ b/Development/SingleInstance/Research/Server-and-Deferred-Test.md
+@@ -0,0 +1,62 @@
++# Public server research and the deferred Teams diagnostic
++
++Official Slippi documentation was checked at:
++https://github.com/project-slippi/slippi-wiki/blob/master/GETTING_STARTED.md
++
++It states: "The source code for the matchmaking server is in a private repository
++and is not currently planned to be open sourced."
++The official organization's public repositories were also enumerated; no matching
++server implementation was found. A public web search for the exact rejection
++message did not find published server code or a policy explaining that rule.
++The 3.7.0 Rust client and protocol are public; the live user's log establishes the
++specific earlier-search eviction. These findings do not establish developer intent
++or whether the service accepts one search during an established peer-to-peer game.
++
++## Implemented diagnostic source
++
++1. Queue Teams in the original Preflight menu saves its selections/code locally.
++   It does NOT send a Teams ticket. HasTeams + Waiting flags show yellow Armed.
++2. Original Queue Unranked / Queue Direct starts the foreground search normally.
++3. Only an actual active singles game with a connected peer, positive game frame,
++   and no local-leave request starts the saved Teams matchmaking object, once.
++4. HasTeams alone means Connecting (yellow). Only Rust RUST_MM_QUEUED confirmation
++   makes TeamsSearching true (green). Ready requires every expected peer connected;
++   errors are red with their reason. A typed native OSD status is refreshed during
++   gameplay and EXI status requests. It requires Dolphin's usual OSD setting enabled.
++5. The existing fully-connected handoff/report/replay barrier is retained. After
++   activation the OSD says MATCH CONNECTED, rather than incorrectly saying off.
++6. A new singles search while a Teams request has already started is blocked with
++   an explicit instruction to cancel Teams first. This one-game diagnostic does
++   not pretend to implement automatic safe pause/resume/requeue across new opponents.
++7. Legacy parking cannot be invoked in this test. Its capability bit identifies
++   the new sequential test; the new game adapter rejects an old host's capability
++   response. An UPDATED ISO and native executable must be used together.
++
++The duplicate Play Singles submenu and its extra context/relocated root array are
++removed. The original five root entries and normal Queue buttons remain. Clicking
++Armed/Searching/Failed Teams cancels only its configuration/search.
++
++The intended bottom caption is:
++Play Unranked or Direct while queuing for doubles! by Jace
++Originally by Aitch
++
++The caption is implemented as a two-line encoded SIS string in the original
++codes.gct Training-caption C2 hook at 0x803A63A4. Inspecting the supplied English
++MnMaAll.usd archive ruled that artwork out; it remains unchanged. Only this one
++caption hook grows, with recalculated branch distances and Gecko payload length.
++Every other loader-code byte remains unchanged. Native SIS copy, six PPC selector
++paths and actual font-margin checks passed. The 96/256 scale gives two 12-unit
++lines, narrower than the original caption; live rendering still needs checking.
++The public kit contains a checksum-bound COPY/DATA recipe, never original game
++modules, loader files or font artwork. Existing Aitch/source credits remain.
++
++The PowerShell patcher now applies all three recipes (tm.dat, other.dat,
++codes.gct), reserves all other disc ranges, verifies hashes and saves a new ISO.
++A synthetic-disc end-to-end run passed exact-output/original-preservation,
++existing-output refusal, altered-module/loader rejection and no-space rejection.
++
++Validation so far: 97 host queue/gating checks, 14 C/host protocol checks, 17
++session-barrier checks, 182 compiled PPC hook checks, 621 real transfer/DMA checks,
++and 5,943 original-menu-navigation checks, plus native translation-unit compilation.
++Game SDK/rendering and server services are mocked in the PPC tests. The diagnostic
++has NOT run in Windows or against public matchmaking, and no crash fix is claimed.
 diff --git a/Development/SingleInstance/Rust/README.md b/Development/SingleInstance/Rust/README.md
 new file mode 100644
 index 0000000..50a0242
@@ -1622,10 +1760,10 @@ index 0000000..4252a42
 +}
 diff --git a/Development/SingleInstance/SessionBarrierTest.cpp b/Development/SingleInstance/SessionBarrierTest.cpp
 new file mode 100644
-index 0000000..9d385b5
+index 0000000..0df5d4f
 --- /dev/null
 +++ b/Development/SingleInstance/SessionBarrierTest.cpp
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,38 @@
 +// Copyright 2026 Dolphin Emulator Project
 +// Licensed under GPLv2+
 +// Refer to the license.txt file included.
@@ -1639,10 +1777,13 @@ index 0000000..9d385b5
 +{
 +  SlippiSessionBarrier b;
 +  Check(b.Idle(), "fresh session can activate");
++  Check(!b.GameplayActive(), "a lobby is not a running singles game");
 +  b.BeginOnlineGame();
++  Check(b.GameplayActive(), "first online game frame permits the deferred-search gate");
 +  Check(!b.OnlineIdle(), "online gameplay prevents parking");
 +  Check(!b.Idle(), "live gameplay blocks activation");
 +  b.EndGame();
++  Check(!b.GameplayActive(), "pending reports do not count as active gameplay");
 +  Check(!b.OnlineIdle(), "outstanding report prevents parking");
 +  Check(!b.Idle(), "game end still waits for report");
 +  b.ReplayQueued();b.ReportFinished();
@@ -1786,7 +1927,7 @@ index 0000000..f40eb55
 +if errorlevel 1 pause
 diff --git a/Development/SingleInstance/Tools/Patch-Preflight.ps1 b/Development/SingleInstance/Tools/Patch-Preflight.ps1
 new file mode 100644
-index 0000000..8a12476
+index 0000000..97463cb
 --- /dev/null
 +++ b/Development/SingleInstance/Tools/Patch-Preflight.ps1
 @@ -0,0 +1,175 @@
@@ -1893,7 +2034,7 @@ index 0000000..8a12476
 +        foreach($name in @('tm.dat','other.dat','codes.gct')){if(-not $files.ContainsKey($name)){throw "Missing $name."}}
 +        $record=$files['codes.gct']
 +        if((Hash (Read-At $reader $record.Offset $record.Size)) -cne $patch.CodesSHA256){throw 'The loader codes do not match this patch.'}
-+        foreach($name in @('tm.dat','other.dat')) {
++        foreach($name in @('tm.dat','other.dat','codes.gct')) {
 +            $record=$files[$name]
 +            $prepared[$name]=Apply-Recipe (Read-At $reader $record.Offset $record.Size) $patch.Files.$name
 +            foreach($other in $allFiles) {
@@ -1910,7 +2051,7 @@ index 0000000..8a12476
 +        # The header/apploader/DOL/FST area is reserved as a complete prefix.
 +        $reservedEnd=[Math]::Max($dolOffset+$dolSize,$fstOffset+$fstSize)
 +        $placements=@{}
-+        foreach($name in @('other.dat','tm.dat')) {
++        foreach($name in @('codes.gct','other.dat','tm.dat')) {
 +            $record=$files[$name];[long]$length=$prepared[$name].Length
 +            $ranges=New-Object 'Collections.Generic.List[object]'
 +            $ranges.Add([pscustomobject]@{Start=0L;End=[long]$reservedEnd})
@@ -1934,7 +2075,7 @@ index 0000000..8a12476
 +        Add-Type -AssemblyName System.Windows.Forms
 +        $dialog=New-Object System.Windows.Forms.SaveFileDialog
 +        $dialog.Title='Save a NEW experimental Preflight ISO';$dialog.Filter='GameCube ISO|*.iso'
-+        $dialog.FileName='Preflight-TeamsPriority-3.7.0-test.iso';$dialog.OverwritePrompt=$true
++        $dialog.FileName='Preflight-Jace-Teams-after-Singles-test.iso';$dialog.OverwritePrompt=$true
 +        try {if($dialog.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK){exit 0};$OutputIso=$dialog.FileName}finally{$dialog.Dispose()}
 +    }
 +    $OutputIso=[IO.Path]::GetFullPath($OutputIso)
@@ -1943,14 +2084,14 @@ index 0000000..8a12476
 +    [IO.File]::Copy($IsoPath,$temporary,$false)
 +    $stream=[IO.File]::Open($temporary,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
 +    try {
-+        foreach($name in @('tm.dat','other.dat')) {
++        foreach($name in @('tm.dat','other.dat','codes.gct')) {
 +            $record=$files[$name];[byte[]]$bytes=$prepared[$name]
 +            $stream.Position=$placements[$name];$stream.Write($bytes,0,$bytes.Length)
 +            $offsetBytes=BE32 $placements[$name];$stream.Position=$record.OffsetField;$stream.Write($offsetBytes,0,4)
 +            $sizeBytes=BE32 $bytes.Length;$stream.Position=$record.SizeField;$stream.Write($sizeBytes,0,4)
 +        }
 +        $stream.Flush()
-+        foreach($name in @('tm.dat','other.dat')) {
++        foreach($name in @('tm.dat','other.dat','codes.gct')) {
 +            $record=$files[$name];$stream.Position=$placements[$name];$bytes=New-Object byte[] $prepared[$name].Length
 +            if($stream.Read($bytes,0,$bytes.Length) -ne $bytes.Length -or (Hash $bytes) -cne $patch.Files.$name.OutputSHA256){throw 'Output verification failed.'}
 +        }
@@ -2163,12 +2304,94 @@ index 0000000..7f45778
 +        subprocess.run([ld,'-r','-T',str(script),str(args.output/'client.o'),str(args.output/(role+'.o')),str(args.output/'restore.o'),'-o',str(args.output/(role+'-hooks.o'))],check=True)
 +    print('Compiled relocatable PowerPC objects:',args.output)
 +if __name__=='__main__':main()
+diff --git a/Development/SingleInstance/Tools/build_preflight_caption.py b/Development/SingleInstance/Tools/build_preflight_caption.py
+new file mode 100644
+index 0000000..dec2c25
+--- /dev/null
++++ b/Development/SingleInstance/Tools/build_preflight_caption.py
+@@ -0,0 +1,76 @@
++#!/usr/bin/env python3
++"""Replace only Preflight v1.1's Training SIS caption hook; original GCT required."""
++import argparse
++import hashlib
++import struct
++from pathlib import Path
++
++ORIGINAL_SHA256 = '1fdf6c7f11268e39d6bd68124b1b287008869f3e941851eb19b23a34dd54701d'
++TITLE = 'Play Unranked or Direct while queuing for doubles! by Jace'
++CREDIT = 'Originally by Aitch'
++HEADER_OFFSET = 0x208
++ORIGINAL_BODY_BYTES = 128
++
++
++def encode_line(text):
++    out = bytearray()
++    for char in text:
++        if 'A' <= char <= 'Z':
++            out.extend((0x20, 10 + ord(char) - ord('A')))
++        elif 'a' <= char <= 'z':
++            out.extend((0x20, 36 + ord(char) - ord('a')))
++        elif char == ' ':
++            out.append(0x1A)
++        elif char == '!':
++            out.extend((0x20, 0xEC))
++        else:
++            raise ValueError('Unsupported SIS character: ' + repr(char))
++    return bytes(out)
++
++
++def caption():
++    # Preserve the original grey, instant text and centered alignment. A scale
++    # of 96/256 fits both lines into roughly the original one-line footprint.
++    return (bytes.fromhex('16 10 0c aa aa aa 0e 00 60 00 60 06 00 00 00 00 18')
++            + encode_line(TITLE) + b'\x03' + encode_line(CREDIT)
++            + bytes.fromhex('19 0f 0d 00'))
++
++
++def build(original):
++    if hashlib.sha256(original).hexdigest() != ORIGINAL_SHA256:
++        raise ValueError('Unsupported loader codes; use the original Preflight v1.1 GCT.')
++    at = HEADER_OFFSET
++    if original[at:at+8] != bytes.fromhex('c2 3a 63 a4 00 00 00 10'):
++        raise ValueError('Caption hook does not match.')
++    old = original[at+8:at+8+ORIGINAL_BODY_BYTES]
++    if old[:12] != bytes.fromhex('2c04008a 40820074 4800006d') or old[-12:] != bytes.fromhex('7c0802a6 901f005c 00000000'):
++        raise ValueError('Caption hook instructions do not match.')
++    body = bytearray(12)
++    body.extend(caption())
++    while len(body) % 4:
++        body.append(0)
++    pointer_at = len(body)
++    body.extend(bytes.fromhex('7c0802a6 901f005c'))  # mflr r0; original stw r0,0x5c(r31)
++    if (len(body) + 4) % 8:
++        body.extend(bytes.fromhex('60000000'))  # nop before Gecko's return placeholder
++    body.extend(b'\0'*4)
++    struct.pack_into('>III', body, 0, 0x2C04008A,
++                     0x40820000 | (pointer_at + 4 - 4),
++                     0x48000001 | (pointer_at - 8))
++    header = struct.pack('>II', 0xC23A63A4, len(body)//8)
++    return original[:at] + header + body + original[at+8+ORIGINAL_BODY_BYTES:]
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('original', type=Path)
++    parser.add_argument('output', type=Path)
++    args = parser.parse_args()
++    result = build(args.original.read_bytes())
++    with args.output.open('xb') as stream:
++        stream.write(result)
++    print('Caption hook verified; all other loader codes preserved:', args.output)
++
++
++if __name__ == '__main__':
++    main()
 diff --git a/Development/SingleInstance/Tools/build_preflight_modules.py b/Development/SingleInstance/Tools/build_preflight_modules.py
 new file mode 100644
-index 0000000..f795ce8
+index 0000000..b6acf91
 --- /dev/null
 +++ b/Development/SingleInstance/Tools/build_preflight_modules.py
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,130 @@
 +#!/usr/bin/env python3
 +"""Build experimental Preflight v1.1 DAT adapters from exact original modules.
 +Requires pyelftools and big-endian PowerPC relocatable hook objects. No ISO is
@@ -2263,50 +2486,14 @@ index 0000000..f795ce8
 +                       queue_unranked_row=0x9f64, queue_direct_row=0x9f90, queue_teams_row=0x9fbc,
 +                       original_teams_label=next(r['target'] for r in module.relocs if r['site']==0x9fbc),
 +                       root_row_count=0xc494, queue_counter=0xc1c8, exit_to_slippi=0xa1bc,
-+                       menu_head=0xc1d8,
-+                       singles_context=len(code) + ((ELFFile(io.BytesIO(hook_object)).get_section_by_name('.pfq')['sh_size']+3)&~3) + 6*44)
++)
 +    else: imports.update(Original_Entry=0x208, Original_Frame=0, Original_OnExit=0xe8, lr_exit=0x380)
 +    exports, new_relocs = add_object(code, hook_object, imports)
 +    if name == 'tm.dat':
-+        # Keep the original 5 rows, including the dynamically populated CPU
-+        # Actions row. Move their references too, before adding a sixth row.
-+        old_rows, old_end, new_rows = 0x9e5c, 0x9f38, len(code)
-+        code.extend(module.code[old_rows:old_end] + b'\0' * 44)
-+        def moved(target):
-+            return new_rows + target - old_rows if old_rows <= target < old_end else target
-+        for r in old_relocs: r['target'] = moved(r['target'])
-+        for r in module.relocs:
-+            if old_rows <= r['site'] < old_end:
-+                new_relocs.append(dict(site=new_rows+r['site']-old_rows,type=r['type'],target=moved(r['target'])))
-+        context = len(code)
-+        code.extend(module.code[0xc408:0xc488])
-+        for r in module.relocs:
-+            if 0xc408 <= r['site'] < 0xc488:
-+                new_relocs.append(dict(site=context+r['site']-0xc408,type=r['type'],target=r['target']))
-+        rows = len(code)
-+        code.extend(b'\0' * (3 * 44))
-+        def pointer(site, value):
-+            nonlocal new_relocs
-+            new_relocs = [r for r in new_relocs if r['site'] != site]
-+            new_relocs.append(dict(site=site,type=1,target=value))
-+        def string(value):
-+            at=len(code); code.extend(value.encode('ascii')+b'\0');code.extend(b'\0' * (-len(code)%4));return at
-+        pointer(context, 0xc488)
-+        struct.pack_into('>I', code, context+12, 3)
-+        pointer(context+20, rows)
-+        root_row = new_rows + 5*44
-+        pointer(root_row, string('Play Singles'))
-+        pointer(root_row+12, 0xa04)
-+        pointer(root_row+28, context)
-+        for i, (label, callback, argument) in enumerate([
-+            ('Unranked', 'PFQ_PlaySingles', 1), ('Direct', 'PFQ_PlaySingles', 2), ('Cancel Teams', 'PFQ_CancelTeams', 0)]):
-+            at = rows+i*44
-+            pointer(at, string(label))
-+            pointer(at+12, exports[callback])
-+            struct.pack_into('>I', code, at+24, argument)
-+            if argument==2: pointer(at+28, 0xc308)
++        # Keep Aitch's original five-row root and update/draw chain intact.
++        # The duplicate Play Singles submenu is intentionally not constructed.
 +        # Intercept only the ordinary Unranked/Direct/Teams buttons, retaining
-+        # Ranked and Party callbacks. The new submenu remains a compatible alias.
++        # Ranked and Party callbacks.
 +        for r in old_relocs:
 +            if r['site'] in (0x9f70, 0x9f9c): r['target'] = exports['PFQ_PlaySingles']
 +            elif r['site'] == 0x9fc8: r['target'] = exports['PFQ_QueueTeams']
@@ -2337,7 +2524,7 @@ index 0000000..f795ce8
 +if __name__=='__main__': main()
 diff --git a/Development/SingleInstance/Tools/make_module_delta.py b/Development/SingleInstance/Tools/make_module_delta.py
 new file mode 100644
-index 0000000..56f28e4
+index 0000000..8a5b5b0
 --- /dev/null
 +++ b/Development/SingleInstance/Tools/make_module_delta.py
 @@ -0,0 +1,46 @@
@@ -2376,7 +2563,7 @@ index 0000000..56f28e4
 +    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('originals',type=Path);ap.add_argument('modified',type=Path);ap.add_argument('output',type=Path)
 +    args=ap.parse_args()
 +    files={}
-+    for name in ['tm.dat','other.dat']:
++    for name in ['tm.dat','other.dat','codes.gct']:
 +        original=(args.originals/name).read_bytes();modified=(args.modified/name).read_bytes()
 +        patch=recipe(original,modified)
 +        if apply(original,patch)!=modified:raise ValueError('Recipe roundtrip failed')
@@ -2389,10 +2576,10 @@ index 0000000..56f28e4
 +if __name__=='__main__':main()
 diff --git a/Development/SingleInstance/Tools/test_ppc_dma.py b/Development/SingleInstance/Tools/test_ppc_dma.py
 new file mode 100644
-index 0000000..2ceb722
+index 0000000..cd5caf9
 --- /dev/null
 +++ b/Development/SingleInstance/Tools/test_ppc_dma.py
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,203 @@
 +#!/usr/bin/env python3
 +"""Run compiled adapters through upstream Slippi EXI transfer AND the supplied
 +DOL's actual EXIDma instructions. Other SDK services and the host queue remain
@@ -2506,7 +2693,7 @@ index 0000000..2ceb722
 +            u.reg_write(P.UC_PPC_REG_3,0x805e0100);self.ret();return
 +        super().hook(u,address,size,user)
 +    def start_team_search(self):
-+        self.foreground=3
++        self.arm()
 +        self.write(self.base+0xc1c8,struct.pack('>I',1))
 +        for delta,value in [(20,1),(32,0x324632c8),(36,0x50ff46ff),(40,0)]:
 +            self.write(self.base+0x9fbc+delta,struct.pack('>I',value))
@@ -2536,10 +2723,11 @@ index 0000000..2ceb722
 +                m=DmaMachine(name,(args.originals/name).read_bytes(),(args.objects/(name[:-4]+'-hooks.o')).read_bytes(),dol,boot,base=0x81000000+shift)
 +                m.run('PFQ_Entry',stack_top=stack)
 +                if name=='tm.dat':
-+                    hooks.check(m.read32(m.base+0xc494)==6,'actual DMA probe enables menu')
-+                    m.run('PFQ_PlaySingles',m.row(0),stack_top=stack)
-+                    hooks.check(m.parked and m.foreground==1,'actual DMA parks Teams before Unranked dispatch')
-+                    m.connected=True;m.run('PFQ_Frame',0x81700000,stack_top=stack)
++                    hooks.check(m.read32(m.base+0xc494)==5,'actual DMA probe retains original root')
++                    m.arm()
++                    m.run('PFQ_PlaySingles',m.base+0x9f64,stack_top=stack)
++                    hooks.check(m.parked and m.foreground==1,'actual DMA retains armed Teams during Unranked dispatch')
++                    m.waiting=False;m.connected=True;m.run('PFQ_Frame',0x81700000,stack_top=stack)
 +                    hooks.check(m.parked and 'cleanup' in m.actions,'cleanup is aligned and leaves background parked')
 +                else:
 +                    m.parked=True;m.connected=True;m.token=17;m.foreground=1;m.write(0x804d6640,b'\x01')
@@ -2571,12 +2759,12 @@ index 0000000..2ceb722
 +        m=queue_machine();m.foreground=255;m.click(0x9fbc)
 +        hooks.check(m.read32(m.base+0xc1e0)==m.base+0xc388 and not m.parked,'ordinary Teams button opens original team/color interface without a background search')
 +        m=queue_machine();m.start_team_search();m.click(0x9f64)
-+        hooks.check(m.parked and m.foreground==1 and m.calls.count(1)==1,'real ordinary Unranked callback starts singles after one Teams park')
++        hooks.check(m.parked and m.foreground==1 and m.calls.count(1)==0,'real ordinary Unranked callback starts singles after one Teams park')
 +        hooks.check(m.search_modes==[1] and len(m.selection_packets)==1,'real Unranked callback sends ordinary selections and search commands')
-+        hooks.check(m.read32(m.base+0x9fbc+36)==0x50ff46ff and m.read32(m.base+0x9f64+36)==0x50ff46ff,'both green outlines survive real original foreground cancellation')
++        hooks.check(m.read32(m.base+0x9fbc+36)==0xffce46ff and m.read32(m.base+0x9f64+36)==0x50ff46ff,'armed Teams remains yellow while singles is green after original cleanup')
 +        hooks.check(m.read32(m.base+0x9f44)==m.base+0x4884 and m.read32(m.base+0x9ff4)==m.base+0x4884,'Ranked/Party callbacks are unchanged')
 +        m.click(0x9f90)
-+        hooks.check(m.parked and m.foreground==255 and m.calls.count(1)==1,'real Direct callback preserves existing background through its cleanup')
++        hooks.check(m.parked and m.foreground==255 and m.calls.count(1)==0,'real Direct callback preserves existing background through its cleanup')
 +        hooks.check(m.read32(m.base+0xc1e0)==m.base+0xc308,'real Direct code-entry interface opens')
 +        hooks.check(m.search_modes==[1],'Direct waits for code confirmation before searching')
 +        m.click(0x9f64)
@@ -2584,12 +2772,6 @@ index 0000000..2ceb722
 +        m.click(0x9fbc)
 +        hooks.check(not m.parked and m.foreground==1 and m.read32(m.base+0x9f64+20)==1,'ordinary Teams button cancels background only and keeps Unranked active')
 +        hooks.check(m.read32(m.base+0x9fbc+36)==0,'Teams outline clears after actual background cancellation')
-+        m=queue_machine();m.start_team_search();m.click(0x9f64)
-+        menu_head=m.read32(m.base+0xc1d8);menu_active=m.read32(m.base+0xc1e0)
-+        cancel=m.row(2);m.click(cancel-m.base)
-+        hooks.check(not m.parked and m.foreground==1 and m.read32(m.base+0x9f64+20)==1,'submenu cancellation preserves a search started by the real Unranked handler')
-+        hooks.check(m.read32(cancel+4)==0 and m.read32(m.base+0xc1d8)==menu_head and m.read32(m.base+0xc1e0)==menu_active,'submenu cancellation adds no overlapping value and preserves menu pointers')
-+        hooks.check(not any(isinstance(action,tuple) and action[0]=='exit_minor' for action in m.actions),'submenu cancellation does not request a scene exit through real transfer code')
 +        m=queue_machine();m.start_team_search();m.click(0x9f64);m.click(0x9f64)
 +        hooks.check(m.parked and m.foreground==255 and m.read32(m.base+0x9f64+20)==0 and m.read32(m.base+0x9fbc+20)==1,'toggling Unranked off leaves background Teams highlighted')
 +        m=queue_machine();m.foreground=255;m.click(0x9f64)
@@ -2603,10 +2785,10 @@ index 0000000..2ceb722
 +if __name__=='__main__':main()
 diff --git a/Development/SingleInstance/Tools/test_ppc_hooks.py b/Development/SingleInstance/Tools/test_ppc_hooks.py
 new file mode 100644
-index 0000000..a9c46d7
+index 0000000..6b92f77
 --- /dev/null
 +++ b/Development/SingleInstance/Tools/test_ppc_hooks.py
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,165 @@
 +#!/usr/bin/env python3
 +"""Execute compiled big-endian PowerPC adapters with mocked game/EXI services.
 +This is an adapter regression test, not a Dolphin or live-match test.
@@ -2637,7 +2819,7 @@ index 0000000..a9c46d7
 +        self.u.mem_map(0x80000000,0x1800000)
 +        self.u.mem_write(self.base,self.module.relocated(self.base))
 +        self.stock=stock;self.foreground=3;self.parked=False;self.connected=False
-+        self.busy=False;self.failed=False;self.token=0;self.tx=b'';self.rx=b''
++        self.waiting=False;self.searching=False;self.busy=False;self.failed=False;self.token=0;self.tx=b'';self.rx=b''
 +        self.calls=[];self.actions=[];self.old_frames=0;self.selected=[]
 +        self.symbols={}
 +        with open(obj_path(name),'rb') as f:
@@ -2668,8 +2850,8 @@ index 0000000..a9c46d7
 +            else:
 +                self.parked=False;self.token+=1
 +                if op==3:self.foreground=3
-+        flags=(1|(4 if self.failed else 2 if self.connected else 0)) if self.parked else 0
-+        return b'PFDQ'+bytes([1,result,flags,self.foreground])+w32(self.token)+w32(15)
++        flags=(1|(4 if self.failed else 2 if self.connected else 8 if self.waiting else 16 if self.searching else 0)) if self.parked else 0
++        return b'PFDQ'+bytes([1,result,flags,self.foreground])+w32(self.token)+w32(31)
 +    def hook(self,u,at,size,userdata):
 +        if at==0x817f0000:u.emu_stop();return
 +        r3=u.reg_read(PPC.UC_PPC_REG_3)
@@ -2712,10 +2894,8 @@ index 0000000..a9c46d7
 +        check(self.u.reg_read(PPC.UC_PPC_REG_PC)==0x817f0000,'hook returned within instruction budget')
 +        check(self.u.reg_read(PPC.UC_PPC_REG_1)==stack_top,'PowerPC stack restored')
 +        check(all(self.u.reg_read(getattr(PPC,'UC_PPC_REG_'+str(r)))==0x12340000+r for r in range(14,32)), 'callee-saved GPRs preserved')
-+    def row(self,index):
-+        root=self.read32(self.base+0xc49c)
-+        context=self.read32(root+5*44+28)
-+        return self.read32(context+20)+index*44
++    def arm(self):
++        self.parked=True;self.waiting=True;self.foreground=255;self.token+=1
 +
 +def obj_path(name):return str(args.objects/(name[:-4]+'-hooks.o'))
 +
@@ -2729,47 +2909,31 @@ index 0000000..a9c46d7
 +    m=machine('tm.dat',stock=True);m.run('PFQ_Entry')
 +    check(m.read32(m.base+0xc494)==5,'stock host cannot expose new menu')
 +    m=machine('tm.dat');m.run('PFQ_Entry')
-+    check(m.read32(m.base+0xc494)==6,'capable host exposes sixth menu row')
-+    context=m.read32(m.read32(m.base+0xc49c)+5*44+28)
-+    check(m.read32(m.base+0xc1d8)==context and m.read32(context)==m.base+0xc208,'new submenu registers in Preflight update/draw chain')
-+    root=m.read32(m.base+0xc49c)
-+    check(bytes(m.u.mem_read(m.read32(root+5*44),13))==b'Play Singles\0','new label and root pointer relocate correctly')
-+    m.run('PFQ_PlaySingles',m.row(0))
-+    check(m.parked and m.foreground==1 and m.calls.count(1)==1,'Unranked starts after Teams parking')
-+    check(m.selected[-1][0]=='unranked','existing Unranked callback reused')
-+    m.run('PFQ_PlaySingles',m.row(1))
-+    check(m.parked and m.foreground==2 and m.calls.count(1)==1,'Direct reuses existing parked Teams')
-+    m.run('PFQ_Frame',0x81700000)
-+    check(m.old_frames==1,'ordinary practice polling preserved while Teams waits')
-+    m.connected=True;m.run('PFQ_Frame',0x81700000)
-+    check(m.old_frames==1 and m.parked,'ready Teams leaves practice without swapping live transport')
-+    check(m.read32(m.base+0xc1c8)==0 and m.u.mem_read(m.base+0xa1bc,1)==b'\x01','original practice exit path requested')
-+    check(m.u.mem_read(0x804d6640,1)==b'\x03','Teams mode selected before exiting practice')
-+    m=machine('tm.dat');m.foreground=1;m.run('PFQ_Entry');m.run('PFQ_PlaySingles',m.row(0))
-+    check(not m.parked and m.foreground==1 and bool(m.selected),'without Teams the ordinary singles behavior remains available')
-+    m=machine('tm.dat');m.run('PFQ_Entry');m.run('PFQ_PlaySingles',m.row(0))
-+    cancel=m.row(2);context=m.read32(m.base+0xc1d8)
-+    m.write(cancel+4,w32(0x81700000))  # Regression: discard a stale status value.
-+    m.run('PFQ_CancelTeams',cancel)
-+    check(not m.parked and m.foreground==1,'cancel Teams leaves singles untouched')
-+    check(m.read32(cancel+4)==0,'Cancel Teams cannot overlap its action label with a status value')
-+    check(m.read32(m.base+0xc1d8)==context,'cancel Teams preserves the menu update/draw chain')
-+    check(not any(isinstance(a,tuple) and a[0]=='exit_minor' for a in m.actions),'cancel Teams does not request a scene exit')
-+    m.write(cancel+4,w32(0x81700000));m.run('PFQ_CancelTeams',cancel)
-+    check(m.read32(cancel+4)==0 and m.foreground==1,'cancel without a Teams search stays value-free and preserves singles')
-+    m=machine('tm.dat');m.run('PFQ_Entry')
-+    check(m.read32(m.base+0x9f70)==m.symbols['PFQ_PlaySingles'] and m.read32(m.base+0x9f9c)==m.symbols['PFQ_PlaySingles'],'ordinary Unranked and Direct buttons call background-preserving wrapper')
-+    check(m.read32(m.base+0x9fc8)==m.symbols['PFQ_QueueTeams'],'ordinary Teams button supports background cancellation')
++    check(m.read32(m.base+0xc494)==5,'duplicate submenu removed: original five root rows remain')
++    check(m.read32(m.base+0xc1d8)==m.base+0xc208,'original update chain has no added submenu')
++    check(m.read32(m.base+0xc49c)==m.base+0x9e5c,'original root row array is not relocated')
++    for waiting,searching,connected,failed,label,color in [
++        (True,False,False,False,b'Teams Armed\0',0xffce46ff),
++        (False,False,False,False,b'Teams Starting\0',0xffce46ff),
++        (False,True,False,False,b'Teams Searching\0',0x50ff46ff),
++        (False,False,True,False,b'Teams Ready\0',0x50ff46ff),
++        (False,False,False,True,b'Teams Failed\0',0xff5050ff)]:
++        m=machine('tm.dat');m.run('PFQ_Entry');m.arm()
++        m.waiting=waiting;m.searching=searching;m.connected=connected;m.failed=failed
++        m.run('PFQ_Frame',0x81700000)
++        name=m.read32(m.base+0x9fbc)
++        check(bytes(m.u.mem_read(name,len(label)))==label,'UI displays actual distinct queue state')
++        check(m.read32(m.base+0x9fbc+36)==color,'only searching/ready are green; waiting is yellow and error red')
++        if not connected:check(m.old_frames==1,'waiting/searching/failure do not trigger scene exit')
++    for offset,mode in [(0x9f64,1),(0x9f90,2)]:
++        m=machine('tm.dat');m.run('PFQ_Entry');m.arm()
++        m.run(m.read32(m.base+offset+12),m.base+offset)
++        check(m.parked and m.foreground==mode and 1 not in m.calls,'ordinary singles button preserves armed configuration without legacy parking')
++        m.run(m.read32(m.base+0x9fc8),m.base+0x9fbc)
++        check(not m.parked and m.foreground==mode,'ordinary Teams button cancels configuration without cancelling singles')
++    m=machine('tm.dat',stock=True);m.run('PFQ_Entry');m.foreground=255
 +    m.run(m.read32(m.base+0x9f70),m.base+0x9f64)
-+    check(m.parked and m.foreground==1 and m.calls.count(1)==1,'ordinary Queue Unranked preserves Teams search')
-+    check(m.read32(m.base+0x9fbc+20)==1 and m.read32(m.base+0x9fbc+36)==0x50ff46ff,'background Teams outline restored from native status')
-+    label=m.read32(m.base+0x9fbc)
-+    check(bytes(m.u.mem_read(label,17))==b'Teams Background\0','background search visibly labelled')
-+    m.run(m.read32(m.base+0x9fc8),m.base+0x9fbc)
-+    check(not m.parked and m.foreground==1 and m.read32(m.base+0x9fbc+20)==0,'Teams button cancels background without replacing singles')
-+    m=machine('tm.dat',stock=True);m.run('PFQ_Entry')
-+    m.run(m.read32(m.base+0x9f70),m.base+0x9f64)
-+    check(not m.parked and m.foreground==1,'stock host keeps ordinary Queue Unranked behavior')
++    check(not m.parked and m.foreground==1,'stock host retains ordinary solo dispatch')
 +    m=machine('other.dat');m.parked=True;m.connected=True;m.token=11;m.foreground=1
 +    m.write(0x804d6640,b'\x01');m.run('PFQ_Entry');m.run('PFQ_Frame',0x81700000)
 +    check(m.parked and 3 not in m.calls,'singles CSS restarts before activation')
@@ -2792,10 +2956,10 @@ index 0000000..a9c46d7
 +    args=ap.parse_args();main()
 diff --git a/Development/SingleInstance/Tools/test_ppc_menus.py b/Development/SingleInstance/Tools/test_ppc_menus.py
 new file mode 100644
-index 0000000..2124694
+index 0000000..c343398
 --- /dev/null
 +++ b/Development/SingleInstance/Tools/test_ppc_menus.py
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,95 @@
 +#!/usr/bin/env python3
 +"""Exercise repeated cancellation and Teams-menu re-entry on actual PPC code.
 +
@@ -2869,34 +3033,20 @@ index 0000000..2124694
 +                    (args.objects / 'tm-hooks.o').read_bytes(), args.dol.read_bytes(),
 +                    bootloader.read_bytes())
 +    m.init_menus()
-+    singles = m.read32(m.read32(m.base + 0xc49c) + 5 * 44 + 28)
 +    for _ in range(args.cycles):
-+        if m.read32(m.base + 0x9f64 + 20):
-+            m.click(0x9f64)
-+        m.start_team_search()
-+        m.click(0x9f64)
-+        # Starting Unranked normally unpauses practice. Reopen before navigation.
-+        m.frame(0x1000)  # Start
-+        m.frame()
-+        m.select(5)
-+        hooks.check(m.active() == singles, 'original dispatcher opens Play Singles')
-+        for _ in range(10):
-+            m.select(2)
-+        hooks.check(not m.parked and m.foreground == 1,
-+                    'repeated cancellation removes only Teams and keeps singles')
-+        m.frame(0x200)  # B
-+        m.frame()
-+        hooks.check(m.active() == m.base + 0xc488, 'B returns to general menu')
 +        m.select(0)
-+        hooks.check(m.active() == m.base + 0xc408, 'Queue reopens after cancellation')
-+        m.select(3)
-+        hooks.check(m.active() == m.base + 0xc388, 'Teams color menu reopens')
-+        m.frame(0x200)
-+        m.frame()
-+        m.frame(0x200)
-+        m.frame()
-+        hooks.check(m.active() == m.base + 0xc488,
-+                    'two Back presses restore general menu without corrupting stack')
++        hooks.check(m.active() == m.base + 0xc408, 'original Queue opens with five-root layout')
++        for _ in range(10):
++            m.start_team_search()
++            m.run('PFQ_Frame',m.base+0xc288)
++            m.select(3)
++            hooks.check(not m.parked, 'original Teams row cancels armed configuration')
++            m.select(3)
++            hooks.check(m.active()==m.base+0xc388,'Teams color menu reopens after cancellation')
++            m.frame(0x200);m.frame()
++            hooks.check(m.active()==m.base+0xc408,'Back restores Queue without duplicate submenu')
++        m.frame(0x200);m.frame()
++        hooks.check(m.active()==m.base+0xc488,'Back restores original general menu')
 +    print(f'{args.cycles} repeated-cancel / reopen-Teams cycles passed; '
 +          f'{args.cycles * 10} cancellation presses; {hooks.checks} checks. '
 +          'Original menu stack/input/update instructions executed. '
@@ -2905,8 +3055,102 @@ index 0000000..2124694
 +
 +if __name__ == '__main__':
 +    main()
+diff --git a/Development/SingleInstance/Tools/test_preflight_caption.py b/Development/SingleInstance/Tools/test_preflight_caption.py
+new file mode 100644
+index 0000000..72567ea
+--- /dev/null
++++ b/Development/SingleInstance/Tools/test_preflight_caption.py
+@@ -0,0 +1,88 @@
++#!/usr/bin/env python3
++"""Check the caption patch against the supplied DOL's real PPC SIS routines."""
++import argparse
++import hashlib
++import struct
++from pathlib import Path
++from unicorn import Uc, UC_ARCH_PPC, UC_MODE_32, UC_MODE_BIG_ENDIAN
++from unicorn import ppc_const as P
++from build_preflight_caption import build, caption, encode_line, TITLE, CREDIT, HEADER_OFFSET
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('original_gct', type=Path)
++    parser.add_argument('dol', type=Path)
++    args = parser.parse_args()
++    original = args.original_gct.read_bytes()
++    updated = build(original)
++    dol = args.dol.read_bytes()
++    assert hashlib.sha256(dol).hexdigest() == 'f604e1399f2dc88e2fbbaa2b3441867ca34d00b99b82e16bee4e4ef108604805'
++    at = HEADER_OFFSET
++    size = struct.unpack_from('>I', updated, at+4)[0]*8
++    assert updated[:at] == original[:at]
++    assert updated[at+8+size:] == original[at+8+128:]
++    assert size % 8 == 0 and updated[at+8+size-4:at+8+size] == b'\0'*4
++    machine = Uc(UC_ARCH_PPC, UC_MODE_32 | UC_MODE_BIG_ENDIAN)
++    machine.mem_map(0x80000000, 0x1800000)
++    for i in range(18):
++        off, address, length = [struct.unpack_from('>I', dol, field+4*i)[0] for field in (0, 0x48, 0x90)]
++        if length:
++            machine.mem_write(address, dol[off:off+length])
++    # Execute the generated C2 body. Both Training and all other SIS IDs must
++    # preserve every GPR except r0, and other IDs must keep their original pointer.
++    code, text = 0x81600000, 0x81500000
++    machine.mem_write(code, updated[at+8:at+8+size])
++    for sis_id in (0, 1, 0x89, 0x8A, 0x8B, 0xFFFF):
++        registers = {i: 0x80010000 + i*0x100 for i in range(32)}
++        registers.update({0: 0x80501234, 4: sis_id, 31: text})
++        for i, value in registers.items():
++            machine.reg_write(getattr(P, 'UC_PPC_REG_'+str(i)), value)
++        machine.reg_write(P.UC_PPC_REG_LR, 0x817F0000)
++        machine.emu_start(code, code+size-4, count=32)
++        pointer = struct.unpack('>I', machine.mem_read(text+0x5C, 4))[0]
++        assert pointer == (code+12 if sis_id == 0x8A else registers[0])
++        for i, value in registers.items():
++            if i:
++                assert machine.reg_read(getattr(P, 'UC_PPC_REG_'+str(i))) == value
++        if sis_id == 0x8A:
++            assert bytes(machine.mem_read(pointer, len(caption()))) == caption()
++    # The game's own copier must consume the complete two-line SIS string.
++    source, dest, stop = 0x80500000, 0x80510000, 0x817F0000
++    machine.mem_write(source, caption())
++    machine.mem_write(dest, b'\xEE'*1024)
++    for i, value in ((1,0x817E0000),(2,0x804DF9E0),(13,0x804DB6A0),(3,dest),(4,source)):
++        machine.reg_write(getattr(P, 'UC_PPC_REG_'+str(i)), value)
++    machine.reg_write(P.UC_PPC_REG_LR, stop)
++    machine.emu_start(0x803A6478, stop, count=10000)
++    copied = bytes(machine.mem_read(dest, len(caption())))
++    assert copied == caption()
++    assert bytes(machine.mem_read(dest+len(caption()), 4)) == b'\xEE'*4
++    # Confirm newline opcode 3 reaches the real renderer's line-advance case.
++    newline_case = struct.unpack('>I', machine.mem_read(0x8040C614+3*4,4))[0]
++    assert newline_case == 0x803A8B10
++    assert struct.unpack('>I',machine.mem_read(newline_case+0x38,4))[0] == 0xD01F0074
++    # Real font margins: new lines must fit the old caption's horizontal span.
++    def width(encoded):
++        total = 0
++        i = 0
++        while i < len(encoded):
++            if encoded[i] == 0x1A:
++                total += 16
++                i += 1
++            else:
++                index = int.from_bytes(encoded[i:i+2],'big')-0x2000
++                total += 34-sum(machine.mem_read(0x8040CB00+2*index,2))
++                i += 2
++        return total
++    old_glyphs = original[at+8+12+17:at+8+0x74].split(bytes.fromhex('19 0f 0d 00'))[0]
++    old_width = width(old_glyphs)*179/256
++    widths = [width(encode_line(line))*96/256 for line in (TITLE,CREDIT)]
++    assert all(0 < w < old_width for w in widths)
++    assert caption().count(b'\x03') == 1
++    print('Caption: six real PPC selector paths, complete native SIS copy, newline case, unchanged other codes and font-width checks passed.')
++    print('Native font widths: old %.2f; new %.2f / %.2f. Two 12-unit lines; live rendering still needs checking.' % (old_width,*widths))
++
++
++if __name__ == '__main__':
++    main()
 diff --git a/Source/Core/Common/Version.cpp b/Source/Core/Common/Version.cpp
-index 344630f..255f365 100644
+index 344630f..6a70a91 100644
 --- a/Source/Core/Common/Version.cpp
 +++ b/Source/Core/Common/Version.cpp
 @@ -25,7 +25,7 @@
@@ -2914,12 +3158,12 @@ index 344630f..255f365 100644
  const std::string scm_rev_str = "Faster Melee - Slippi (" SLIPPI_REV_STR ") - Playback" DEBUGFAST_STR;
  #else
 -const std::string scm_rev_str = "Faster Melee - Slippi (" SLIPPI_REV_STR ")" DEBUGFAST_STR;
-+const std::string scm_rev_str = "Faster Melee - Slippi (" SLIPPI_REV_STR ") [Teams Priority test]" DEBUGFAST_STR;
++const std::string scm_rev_str = "Faster Melee - Slippi (" SLIPPI_REV_STR ") [Jace Teams-after-Singles test]" DEBUGFAST_STR;
  #endif
  const std::string scm_slippi_semver_str = SLIPPI_REV_STR;
  
 diff --git a/Source/Core/Core/HW/EXI_DeviceSlippi.cpp b/Source/Core/Core/HW/EXI_DeviceSlippi.cpp
-index d57ebf5..6763feb 100644
+index d57ebf5..96d3bf2 100644
 --- a/Source/Core/Core/HW/EXI_DeviceSlippi.cpp
 +++ b/Source/Core/Core/HW/EXI_DeviceSlippi.cpp
 @@ -171,11 +171,11 @@ CEXISlippi::CEXISlippi()
@@ -3057,7 +3301,7 @@ index d57ebf5..6763feb 100644
  
  	std::string str(&dateTimeBuf[0]);
  	return StringFromFormat("Game_%s.slp", str.c_str());
-@@ -1297,10 +1305,24 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
+@@ -1297,10 +1305,45 @@ void CEXISlippi::handleOnlineInputs(u8 *payload)
  
  		// Reset character selections such that they are cleared for next game
  		localSelections.Reset();
@@ -3071,6 +3315,27 @@ index d57ebf5..6763feb 100644
 +	}
  
 -		startInputSuggestions(delay, inputSourcePort);
++	if (m_pendingTeams && !m_pendingTeams->started &&
++	    SlippiQueueControl::CanStartDeferred(static_cast<SlippiQueueControl::Mode>(lastSearch.mode),
++	                                         !isDisconnected(), frame >= 1 && m_sessionBarrier.GameplayActive() && !isLeaving))
++	{
++		// The foreground's matchmaking connection has finished. Its live game
++		// uses peer-to-peer netplay; this is the first Teams server request.
++		m_pendingTeams->started = true;
++		try
++		{
++			m_pendingTeams->matchmaking->FindMatch(m_pendingTeams->search);
++			INFO_LOG(SLIPPI_ONLINE, "[Teams after singles] Singles game active; starting Teams matchmaking");
++		}
++		catch (const std::exception& error)
++		{
++			// Keep an explicit failure for the UI instead of silently retrying.
++			m_pendingTeams->startError = std::string("Could not start Teams: ") + error.what();
++			ERROR_LOG(SLIPPI_ONLINE, "[Teams after singles] Start failed: %s", error.what());
++		}
++	}
++	UpdateTeamsStatus();
++
 +	// Successful peer connections, rather than a server assignment, give Teams
 +	// priority. Use the ordinary disconnect/game-end path; the game-side scene
 +	// controller still must clean up singles and request an explicit handoff.
@@ -3083,7 +3348,7 @@ index d57ebf5..6763feb 100644
  	}
  
  	// The local player chose to leave, which ends the game for us the same way as losing the connection. The other
-@@ -1422,7 +1444,7 @@ void CEXISlippi::handleMatchQuality(s32 frame, bool isStall)
+@@ -1422,7 +1465,7 @@ void CEXISlippi::handleMatchQuality(s32 frame, bool isStall)
  	// disconnect-detection path end the game naturally (next handleOnlineInputs sees
  	// isDisconnected()), same as a real disconnect. The reason rides the disconnect to the
  	// peer so both clients surface the OSD message from the shared disconnect path below.
@@ -3092,7 +3357,7 @@ index d57ebf5..6763feb 100644
  	slippi_netplay->ForceDisconnect(SlippiNetplayClient::SlippiDisconnectReason::POOR_PERFORMANCE);
  	ERROR_LOG(SLIPPI_ONLINE, "Match terminated due to poor performance on frame %d", frame);
  }
-@@ -1938,6 +1960,13 @@ void CEXISlippi::startFindMatch(u8 *payload)
+@@ -1938,6 +1981,13 @@ void CEXISlippi::startFindMatch(u8 *payload)
  {
  	SlippiMatchmaking::MatchSearchSettings search;
  	search.mode = (SlippiMatchmaking::OnlinePlayMode)payload[0];
@@ -3106,7 +3371,44 @@ index d57ebf5..6763feb 100644
  
  	std::string shiftJisCode;
  	shiftJisCode.insert(shiftJisCode.begin(), &payload[1], &payload[1] + 18);
-@@ -2185,6 +2214,8 @@ void CEXISlippi::prepareOnlineMatchState()
+@@ -1961,6 +2011,13 @@ void CEXISlippi::startFindMatch(u8 *payload)
+ 	// search.connectCode = SHIFTJISToUTF8(shiftJisCode).c_str();
+ 	search.connectCode = shiftJisCode;
+ 
++	if (m_pendingTeams && m_pendingTeams->started &&
++	    SlippiQueueControl::IsSinglesMode(static_cast<SlippiQueueControl::Mode>(search.mode)))
++	{
++		forcedError = "Cancel Teams before searching for a new singles opponent";
++		return;
++	}
++
+ 	// Store this search so we know what was queued for
+ 	lastSearch = search;
+ 
+@@ -2006,6 +2063,22 @@ void CEXISlippi::startFindMatch(u8 *payload)
+ 		isEnetInitialized = true;
+ 	}
+ 
++	if (search.mode == SlippiMatchmaking::TEAMS)
++	{
++		// Configure locally, without opening a Teams ticket that singles would evict.
++		auto pending = std::make_unique<PendingTeams>();
++		pending->matchmaking = std::make_unique<SlippiMatchmaking>(slprs_exi_device_ptr, user.get(), false, false);
++		pending->search = search;
++		pending->selections = localSelections;
++		pending->allowedStages = allowedStages;
++		pending->stagePool = stagePool;
++		m_pendingTeams = std::move(pending);
++		m_queueControl.TeamsChanged();
++		lastSearch = SlippiMatchmaking::MatchSearchSettings();
++		INFO_LOG(SLIPPI_ONLINE, "[Teams after singles] Armed locally; no Teams ticket started");
++		UpdateTeamsStatus();
++		return;
++	}
+ 	matchmaking->FindMatch(search);
+ #endif
+ }
+@@ -2185,6 +2258,8 @@ void CEXISlippi::prepareOnlineMatchState()
  #else
  			slippi_netplay = matchmaking->GetNetplayClient();
  #endif
@@ -3115,7 +3417,7 @@ index d57ebf5..6763feb 100644
  
  			// This happens on the initial connection to a player. The matchmaking object is ephemeral, it
  			// gets re-created when a connection is terminated, that said, it can still be useful to know
-@@ -2262,7 +2293,7 @@ void CEXISlippi::prepareOnlineMatchState()
+@@ -2262,7 +2337,7 @@ void CEXISlippi::prepareOnlineMatchState()
  		// Here we are connected, check to see if we should init play session
  		if (!isPlaySessionActive)
  		{
@@ -3124,7 +3426,7 @@ index d57ebf5..6763feb 100644
  			isPlaySessionActive = true;
  		}
  	}
-@@ -2792,6 +2823,12 @@ u16 CEXISlippi::getRandomStage()
+@@ -2792,6 +2867,12 @@ u16 CEXISlippi::getRandomStage()
  
  void CEXISlippi::setMatchSelections(u8 *payload)
  {
@@ -3137,7 +3439,7 @@ index d57ebf5..6763feb 100644
  	SlippiPlayerSelections s;
  
  	s.teamId = payload[0];
-@@ -3087,22 +3124,149 @@ void doConnectionCleanup(std::unique_ptr<SlippiMatchmaking> mm, std::unique_ptr<
+@@ -3087,22 +3168,197 @@ void doConnectionCleanup(std::unique_ptr<SlippiMatchmaking> mm, std::unique_ptr<
  		nc.reset();
  }
  
@@ -3186,12 +3488,57 @@ index d57ebf5..6763feb 100644
 +
 +bool CEXISlippi::CanParkTeams() const
 +{
-+	return matchmaking && lastSearch.mode == SlippiMatchmaking::TEAMS &&
-+	       matchmaking->IsSearching() && !slippi_netplay && !isPlaySessionActive &&
-+	       m_sessionBarrier.OnlineIdle() && forcedError.empty();
++	// This test arms Teams locally instead of parking a live server ticket.
++	return false;
 +}
 +
 +bool CEXISlippi::HasTeams() const { return m_pendingTeams != nullptr; }
++bool CEXISlippi::TeamsWaiting() const { return m_pendingTeams && !m_pendingTeams->started; }
++bool CEXISlippi::TeamsSearching() const
++{
++	return m_pendingTeams && m_pendingTeams->started &&
++	       m_pendingTeams->matchmaking->GetMatchmakeState() == SlippiMatchmaking::MATCHMAKING &&
++	       m_pendingTeams->matchmaking->IsQueueConfirmed();
++}
++void CEXISlippi::UpdateTeamsStatus()
++{
++	auto now = Common::Timer::GetTimeMs();
++	if (now < m_nextTeamsStatusMs) return;
++	m_nextTeamsStatusMs = now + 400;
++	if (!m_pendingTeams)
++	{
++		if (lastSearch.mode == SlippiMatchmaking::TEAMS && matchmaking &&
++		    matchmaking->GetMatchmakeState() == SlippiMatchmaking::CONNECTION_SUCCESS)
++		{
++			OSD::AddTypedMessage(OSD::MessageType::TeamsQueueStatus, "Teams: MATCH CONNECTED", 1500, OSD::Color::GREEN);
++			m_teamsStatusVisible = true;
++			return;
++		}
++		if (m_teamsStatusVisible)
++			OSD::AddTypedMessage(OSD::MessageType::TeamsQueueStatus, "Teams: off", 1500, OSD::Color::CYAN);
++		m_teamsStatusVisible = false;
++		return;
++	}
++	m_teamsStatusVisible = true;
++	std::string text;
++	u32 color = OSD::Color::YELLOW;
++	if (TeamsFailed())
++	{
++		auto reason = m_pendingTeams->startError.empty() ?
++		    m_pendingTeams->matchmaking->GetErrorMessage() : m_pendingTeams->startError;
++		text = "Teams: FAILED - " + (reason.empty() ? "peer connection lost" : reason);
++		color = OSD::Color::RED;
++	}
++	else if (TeamsWaiting()) text = "Teams: ARMED - waiting for singles game (not searching)";
++	else if (TeamsReady()) { text = "Teams: READY - all peers connected"; color = OSD::Color::GREEN; }
++	else if (TeamsSearching())
++	{
++		text = "Teams: SEARCHING - server accepted";
++		color = OSD::Color::GREEN;
++	}
++	else text = "Teams: CONNECTING - awaiting server acceptance";
++	OSD::AddTypedMessage(OSD::MessageType::TeamsQueueStatus, text, 1500, color);
++}
 +bool CEXISlippi::TeamsReady() const
 +{
 +	return m_pendingTeams && m_pendingTeams->matchmaking->HasConnectedPeers();
@@ -3201,7 +3548,7 @@ index d57ebf5..6763feb 100644
 +	if (!m_pendingTeams)
 +		return false;
 +	const auto state = m_pendingTeams->matchmaking->GetMatchmakeState();
-+	return state == SlippiMatchmaking::ERROR_ENCOUNTERED ||
++	return !m_pendingTeams->startError.empty() || state == SlippiMatchmaking::ERROR_ENCOUNTERED ||
 +	       (state == SlippiMatchmaking::CONNECTION_SUCCESS && !TeamsReady());
 +}
 +
@@ -3254,6 +3601,8 @@ index d57ebf5..6763feb 100644
 +		return;
 +	queueConnectionCleanup(std::move(m_pendingTeams->matchmaking), nullptr);
 +	m_pendingTeams.reset();
++	m_nextTeamsStatusMs = 0;
++	UpdateTeamsStatus();
 +}
 +
 +void CEXISlippi::handleQueueControl(const u8* payload, size_t length)
@@ -3266,6 +3615,7 @@ index d57ebf5..6763feb 100644
 +		reply = m_queueControl.Respond(SlippiQueueControl::Result::InternalError, *this);
 +	}
 +	m_read_queue.assign(reply.begin(), reply.end());
++	UpdateTeamsStatus();
 +}
 +
  void CEXISlippi::handleConnectionCleanup()
@@ -3290,7 +3640,7 @@ index d57ebf5..6763feb 100644
  
  	// Reset random stage pool
  	stagePool.clear();
-@@ -3202,8 +3366,9 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
+@@ -3202,8 +3458,9 @@ void CEXISlippi::handleReportGame(const SlippiExiTypes::ReportGameQuery &query)
  	}
  
  #ifndef LOCAL_TESTING
@@ -3301,7 +3651,7 @@ index d57ebf5..6763feb 100644
  }
  
  void CEXISlippi::prepareDelayResponse()
-@@ -3306,7 +3471,7 @@ void CEXISlippi::handleCompleteSet(const SlippiExiTypes::ReportSetCompletionQuer
+@@ -3306,7 +3563,7 @@ void CEXISlippi::handleCompleteSet(const SlippiExiTypes::ReportSetCompletionQuer
  		auto userInfo = user->GetUserInfo();
  
  		auto status = query.endMode == 0 ? "normal_completion" : "abnormal_completion";
@@ -3310,7 +3660,7 @@ index d57ebf5..6763feb 100644
  	}
  }
  
-@@ -3330,7 +3495,7 @@ void CEXISlippi::handleMatchStatusUpdate(const SlippiExiTypes::ReportMatchStatus
+@@ -3330,7 +3587,7 @@ void CEXISlippi::handleMatchStatusUpdate(const SlippiExiTypes::ReportMatchStatus
  	INFO_LOG(SLIPPI_ONLINE, "Reporting match status update: %s, Status: %s", lastMatchId.c_str(), statusString.c_str());
  
  	// Report asynchronously when called from the game
@@ -3319,7 +3669,7 @@ index d57ebf5..6763feb 100644
  }
  
  void CEXISlippi::handleGetPlayerSettings()
-@@ -3377,7 +3542,7 @@ void CEXISlippi::handleGetPlayerSettings()
+@@ -3377,7 +3634,7 @@ void CEXISlippi::handleGetPlayerSettings()
  
  void CEXISlippi::handleGetRank()
  {
@@ -3328,7 +3678,7 @@ index d57ebf5..6763feb 100644
  	m_read_queue.clear();
  
  	// Determine rank info visibility
-@@ -3427,7 +3592,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3427,7 +3684,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
  		m_slippiserver->startGame();
  		m_slippiserver->write(&memPtr[0], receiveCommandsLen + 1);
  
@@ -3337,7 +3687,7 @@ index d57ebf5..6763feb 100644
  	}
  
  	if (byte == CMD_MENU_FRAME)
-@@ -3455,13 +3620,19 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3455,13 +3712,19 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
  		}
  
  		u32 payloadLen = payloadSizes[byte];
@@ -3358,7 +3708,7 @@ index d57ebf5..6763feb 100644
  			slprs_input_suggestions_end_game();
  			slprs_match_quality_end_game();
  			break;
-@@ -3476,7 +3647,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3476,7 +3739,7 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
  			g_needInputForFrame = true;
  			writeToFileAsync(&memPtr[bufLoc], payloadLen + 1, "");
  			m_slippiserver->write(&memPtr[bufLoc], payloadLen + 1);
@@ -3367,7 +3717,7 @@ index d57ebf5..6763feb 100644
  			break;
  		case CMD_IS_STOCK_STEAL:
  			prepareIsStockSteal(&memPtr[bufLoc + 1]);
-@@ -3497,6 +3668,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3497,6 +3760,9 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
  		case CMD_LOAD_SAVESTATE:
  			handleLoadSavestate(&memPtr[bufLoc + 1]);
  			break;
@@ -3377,7 +3727,7 @@ index d57ebf5..6763feb 100644
  		case CMD_GET_MATCH_STATE:
  			prepareOnlineMatchState();
  			break;
-@@ -3581,16 +3755,16 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3581,16 +3847,16 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
  		case CMD_PLAY_MUSIC:
  		{
  			auto args = SlippiExiTypes::Convert<SlippiExiTypes::PlayMusicQuery>(&memPtr[bufLoc]);
@@ -3397,7 +3747,7 @@ index d57ebf5..6763feb 100644
  			break;
  		}
  		case CMD_GET_RANK:
-@@ -3600,13 +3774,13 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
+@@ -3600,13 +3866,13 @@ void CEXISlippi::DMAWrite(u32 _uAddr, u32 _uSize)
  		}
  		case CMD_FETCH_RANK:
  		{
@@ -3413,7 +3763,7 @@ index d57ebf5..6763feb 100644
  			break;
  		}
  
-@@ -3654,20 +3828,20 @@ void CEXISlippi::ConfigureJukebox()
+@@ -3654,20 +3920,20 @@ void CEXISlippi::ConfigureJukebox()
  	int systemVolume = SConfig::GetInstance().m_IsMuted ? 0 : SConfig::GetInstance().m_Volume;
  	int jukeboxVolume = SConfig::GetInstance().iSlippiJukeboxVolume;
  
@@ -3438,7 +3788,7 @@ index d57ebf5..6763feb 100644
  
  bool CEXISlippi::IsPresent() const
 diff --git a/Source/Core/Core/HW/EXI_DeviceSlippi.h b/Source/Core/Core/HW/EXI_DeviceSlippi.h
-index a85e3f9..0cadd54 100644
+index a85e3f9..8c38f04 100644
 --- a/Source/Core/Core/HW/EXI_DeviceSlippi.h
 +++ b/Source/Core/Core/HW/EXI_DeviceSlippi.h
 @@ -14,6 +14,10 @@
@@ -3507,7 +3857,7 @@ index a85e3f9..0cadd54 100644
  	std::thread m_fileWriteThread;
  
  	std::unordered_map<u8, std::string> getNetplayNames();
-@@ -356,6 +368,39 @@ class CEXISlippi : public IEXIDevice
+@@ -356,6 +368,46 @@ class CEXISlippi : public IEXIDevice
  	void TransferByte(u8 &byte) override;
  
    private:
@@ -3520,6 +3870,8 @@ index a85e3f9..0cadd54 100644
 +	struct PendingTeams
 +	{
 +		std::unique_ptr<SlippiMatchmaking> matchmaking;
++		bool started = false;
++		std::string startError;
 +		SlippiPlayerSelections selections;
 +		SlippiMatchmaking::MatchSearchSettings search;
 +		std::vector<u16> allowedStages;
@@ -3540,6 +3892,11 @@ index a85e3f9..0cadd54 100644
 +	bool HasTeams() const override;
 +	bool TeamsReady() const override;
 +	bool TeamsFailed() const override;
++	bool TeamsWaiting() const override;
++	bool TeamsSearching() const override;
++	void UpdateTeamsStatus();
++	u64 m_nextTeamsStatusMs = 0;
++	bool m_teamsStatusVisible = false;
 +	void ParkTeams() override;
 +	void ActivateTeams() override;
 +	void CancelTeams() override;
@@ -3655,7 +4012,7 @@ index ceb83f5..b980106 100644
 +	SlippiRustAccess m_rustAccess;
  };
 diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
-index 210d51d..9c869f9 100644
+index 210d51d..99ccea0 100644
 --- a/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
 +++ b/Source/Core/Core/Slippi/SlippiMatchmaking.cpp
 @@ -26,13 +26,20 @@ enum RustMmState
@@ -3697,7 +4054,15 @@ index 210d51d..9c869f9 100644
  }
  
  void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
-@@ -64,7 +73,7 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
+@@ -56,6 +65,7 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
+ 	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Starting matchmaking...");
+ 
+ 	m_searchSettings = settings;
++	m_queueConfirmed.store(false, std::memory_order_release);
+ 
+ 	m_errorMsg = "";
+ 	m_state = ProcessState::INITIALIZING;
+@@ -64,7 +74,7 @@ void SlippiMatchmaking::FindMatch(MatchSearchSettings settings)
  
  SlippiMatchmaking::ProcessState SlippiMatchmaking::GetMatchmakeState()
  {
@@ -3706,7 +4071,7 @@ index 210d51d..9c869f9 100644
  }
  
  std::string SlippiMatchmaking::GetErrorMessage()
-@@ -74,7 +83,7 @@ std::string SlippiMatchmaking::GetErrorMessage()
+@@ -74,7 +84,7 @@ std::string SlippiMatchmaking::GetErrorMessage()
  
  bool SlippiMatchmaking::IsSearching()
  {
@@ -3715,7 +4080,7 @@ index 210d51d..9c869f9 100644
  }
  
  std::unique_ptr<SlippiNetplayClient> SlippiMatchmaking::GetNetplayClient()
-@@ -82,6 +91,17 @@ std::unique_ptr<SlippiNetplayClient> SlippiMatchmaking::GetNetplayClient()
+@@ -82,6 +92,17 @@ std::unique_ptr<SlippiNetplayClient> SlippiMatchmaking::GetNetplayClient()
  	return std::move(m_netplayClient);
  }
  
@@ -3733,7 +4098,7 @@ index 210d51d..9c869f9 100644
  bool SlippiMatchmaking::IsFixedRulesMode(SlippiMatchmaking::OnlinePlayMode mode)
  {
  	return mode == SlippiMatchmaking::OnlinePlayMode::UNRANKED || mode == SlippiMatchmaking::OnlinePlayMode::RANKED ||
-@@ -97,7 +117,7 @@ void SlippiMatchmaking::MatchmakeThread()
+@@ -97,7 +118,7 @@ void SlippiMatchmaking::MatchmakeThread()
  			break;
  		}
  
@@ -3742,7 +4107,7 @@ index 210d51d..9c869f9 100644
  		{
  		case ProcessState::INITIALIZING:
  			startMatchmaking();
-@@ -119,7 +139,7 @@ void SlippiMatchmaking::terminateMmConnection()
+@@ -119,7 +140,7 @@ void SlippiMatchmaking::terminateMmConnection()
  {
  	if (m_sessionId != 0)
  	{
@@ -3751,7 +4116,7 @@ index 210d51d..9c869f9 100644
  		m_sessionId = 0;
  	}
  
-@@ -278,7 +298,11 @@ void SlippiMatchmaking::startMatchmaking()
+@@ -278,24 +299,28 @@ void SlippiMatchmaking::startMatchmaking()
  	// If IsFixedRules mode, don't allow ISO's that are known to desync
  	if (IsFixedRulesMode(m_searchSettings.mode))
  	{
@@ -3764,8 +4129,12 @@ index 210d51d..9c869f9 100644
  		while (check.result == 0)
  		{
  			Common::SleepCurrentThread(500);
-@@ -289,7 +313,7 @@ void SlippiMatchmaking::startMatchmaking()
+ 			retryCount++;
+ 			if (retryCount > 10)
+ 			{
+-				m_state = ProcessState::ERROR_ENCOUNTERED;
  				m_errorMsg = "Could not validate ISO";
++				m_state = ProcessState::ERROR_ENCOUNTERED;
  				return;
  			}
 -			check = slprs_get_iso_md5_check(slprs_exi_device_ptr);
@@ -3773,7 +4142,14 @@ index 210d51d..9c869f9 100644
  		}
  
  		if (check.result == 2)
-@@ -303,7 +327,7 @@ void SlippiMatchmaking::startMatchmaking()
+ 		{
+-			m_state = ProcessState::ERROR_ENCOUNTERED;
+ 			m_errorMsg = "Cannot queue for this mode with a modded ISO known to desync";
++			m_state = ProcessState::ERROR_ENCOUNTERED;
+ 			return;
+ 		}
+ 	}
+@@ -303,7 +328,7 @@ void SlippiMatchmaking::startMatchmaking()
  	retryCount = 0;
  	while (m_client == nullptr && retryCount < 15)
  	{
@@ -3782,7 +4158,17 @@ index 210d51d..9c869f9 100644
  
  		if (customPort)
  			m_hostPort = SConfig::GetInstance().m_slippiNetplayPort;
-@@ -417,7 +441,7 @@ void SlippiMatchmaking::startMatchmaking()
+@@ -324,8 +349,8 @@ void SlippiMatchmaking::startMatchmaking()
+ 	if (m_client == nullptr)
+ 	{
+ 		// Failed to create client
+-		m_state = ProcessState::ERROR_ENCOUNTERED;
+ 		m_errorMsg = "Failed to create mm client";
++		m_state = ProcessState::ERROR_ENCOUNTERED;
+ 		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Failed to create client...");
+ 		return;
+ 	}
+@@ -417,7 +442,7 @@ void SlippiMatchmaking::startMatchmaking()
  	if (isMmTerminated)
  		return;
  
@@ -3791,16 +4177,17 @@ index 210d51d..9c869f9 100644
  
  	m_state = ProcessState::MATCHMAKING;
  	ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Search started");
-@@ -429,7 +453,7 @@ void SlippiMatchmaking::handleMatchmaking()
+@@ -429,7 +454,8 @@ void SlippiMatchmaking::handleMatchmaking()
  	if (m_state != ProcessState::MATCHMAKING)
  		return;
  
 -	int rustState = slprs_mm_state(slprs_exi_device_ptr);
 +	int rustState = slprs_mm_client_state(m_mmClient);
++	m_queueConfirmed.store(rustState == RUST_MM_QUEUED, std::memory_order_release);
  	switch (rustState)
  	{
  	case RUST_MM_CONNECTING:
-@@ -441,7 +465,7 @@ void SlippiMatchmaking::handleMatchmaking()
+@@ -441,7 +467,7 @@ void SlippiMatchmaking::handleMatchmaking()
  
  	case RUST_MM_FAILED:
  	{
@@ -3809,7 +4196,13 @@ index 210d51d..9c869f9 100644
  		m_errorMsg = message ? std::string(message) : "Matchmaking failed";
  		slprs_mm_free_string(message);
  		m_sessionId = 0;
-@@ -463,7 +487,7 @@ void SlippiMatchmaking::handleMatchmaking()
+@@ -458,18 +484,18 @@ void SlippiMatchmaking::handleMatchmaking()
+ 		// The session ended without a result, which only happens if it was cancelled out from
+ 		// under us
+ 		m_sessionId = 0;
+-		m_state = ProcessState::ERROR_ENCOUNTERED;
+ 		m_errorMsg = "Matchmaking was cancelled";
++		m_state = ProcessState::ERROR_ENCOUNTERED;
  		return;
  	}
  
@@ -3818,7 +4211,24 @@ index 210d51d..9c869f9 100644
  	m_sessionId = 0;
  	if (!resultJson)
  	{
-@@ -617,6 +641,7 @@ void SlippiMatchmaking::handleMatchmaking()
+ 		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Match result was missing");
+-		m_state = ProcessState::ERROR_ENCOUNTERED;
+ 		m_errorMsg = "Invalid response when getting mm status";
++		m_state = ProcessState::ERROR_ENCOUNTERED;
+ 		return;
+ 	}
+ 
+@@ -479,8 +505,8 @@ void SlippiMatchmaking::handleMatchmaking()
+ 	if (getResp.is_discarded() || !getResp.is_object())
+ 	{
+ 		ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Match result could not be parsed");
+-		m_state = ProcessState::ERROR_ENCOUNTERED;
+ 		m_errorMsg = "Invalid response when getting mm status";
++		m_state = ProcessState::ERROR_ENCOUNTERED;
+ 		return;
+ 	}
+ 
+@@ -617,6 +643,7 @@ void SlippiMatchmaking::handleMatchmaking()
  	// If ranked, report to backend that we are attempting to connect to this match
  	if (matchId.find("mode.ranked") != std::string::npos)
  	{
@@ -3826,7 +4236,7 @@ index 210d51d..9c869f9 100644
  		slprs_exi_device_report_match_status(slprs_exi_device_ptr, matchId.c_str(), "connecting", true);
  	}
  
-@@ -806,7 +831,7 @@ void SlippiMatchmaking::handleConnecting()
+@@ -806,7 +833,7 @@ void SlippiMatchmaking::handleConnecting()
  
  	// Is host is now used to specify who the decider is
  	auto client = std::make_unique<SlippiNetplayClient>(addrs, ports, remotePlayerCount, m_hostPort, m_isHost,
@@ -3835,8 +4245,24 @@ index 210d51d..9c869f9 100644
  
  	while (!m_netplayClient)
  	{
+@@ -828,7 +855,6 @@ void SlippiMatchmaking::handleConnecting()
+ 			// If we failed setting up a connection in teams mode, show a detailed error about who we had issues
+ 			// connecting to.
+ 			ERROR_LOG(SLIPPI_ONLINE, "[Matchmaking] Failed to connect to players");
+-			m_state = ProcessState::ERROR_ENCOUNTERED;
+ 			m_errorMsg = "Timed out waiting for other players to connect";
+ 			auto failedConns = client->GetFailedConnections();
+ 			if (!failedConns.empty())
+@@ -850,6 +876,7 @@ void SlippiMatchmaking::handleConnecting()
+ 				m_errorMsg = err.str();
+ 			}
+ 
++			m_state = ProcessState::ERROR_ENCOUNTERED;
+ 			return;
+ 		}
+ 		else if (status != SlippiNetplayClient::SlippiConnectStatus::NET_CONNECT_STATUS_CONNECTED)
 diff --git a/Source/Core/Core/Slippi/SlippiMatchmaking.h b/Source/Core/Core/Slippi/SlippiMatchmaking.h
-index 2aee36d..c013e4a 100644
+index 2aee36d..64a317f 100644
 --- a/Source/Core/Core/Slippi/SlippiMatchmaking.h
 +++ b/Source/Core/Core/Slippi/SlippiMatchmaking.h
 @@ -10,6 +10,7 @@
@@ -3857,19 +4283,22 @@ index 2aee36d..c013e4a 100644
  	~SlippiMatchmaking();
  
  	enum OnlinePlayMode
-@@ -94,6 +96,8 @@ class SlippiMatchmaking
+@@ -93,7 +95,10 @@ class SlippiMatchmaking
+ 	void MatchmakeThread();
  	ProcessState GetMatchmakeState();
  	bool IsSearching();
++	bool IsQueueConfirmed() const { return m_queueConfirmed.load(std::memory_order_acquire); }
  	std::unique_ptr<SlippiNetplayClient> GetNetplayClient();
 +	// CPU-thread query after the atomic CONNECTION_SUCCESS publication.
 +	bool HasConnectedPeers();
  	std::string GetErrorMessage();
  	int LocalPlayerIndex();
  	std::vector<SlippiUser::UserInfo> GetPlayerInfo();
-@@ -129,19 +133,24 @@ class SlippiMatchmaking
+@@ -129,19 +134,25 @@ class SlippiMatchmaking
  	// Identifies the Rust-side session this object started, so tearing this object down
  	// cannot cancel a newer search started by another instance.
  	u64 m_sessionId = 0;
++	std::atomic<bool> m_queueConfirmed{false};
 +	// Each C++ context owns a separate WebSocket matchmaking client.
 +	uintptr_t m_mmClient = 0;
  
@@ -4070,10 +4499,10 @@ index 5579259..641a40d 100644
  #include "Common/StringUtil.h"
 diff --git a/Source/Core/Core/Slippi/SlippiQueueControl.h b/Source/Core/Core/Slippi/SlippiQueueControl.h
 new file mode 100644
-index 0000000..d79375d
+index 0000000..fb92573
 --- /dev/null
 +++ b/Source/Core/Core/Slippi/SlippiQueueControl.h
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,136 @@
 +// Copyright 2026 Dolphin Emulator Project
 +// Licensed under GPLv2+
 +// Refer to the license.txt file included.
@@ -4115,10 +4544,19 @@ index 0000000..d79375d
 +    virtual bool HasTeams() const = 0;
 +    virtual bool TeamsReady() const = 0;
 +    virtual bool TeamsFailed() const = 0;
++    virtual bool TeamsWaiting() const { return false; }
++    virtual bool TeamsSearching() const { return false; }
 +    virtual void ParkTeams() = 0;
 +    virtual void ActivateTeams() = 0;
 +    virtual void CancelTeams() = 0;
 +  };
++
++  // A game-side Teams configuration may now be armed without opening a ticket.
++  void TeamsChanged() { AdvanceGeneration(); }
++  static bool CanStartDeferred(Mode mode, bool connected, bool gameStarted)
++  {
++    return IsSinglesMode(mode) && connected && gameStarted;
++  }
 +
 +  Reply Handle(const std::uint8_t* request, std::size_t size, Backend& backend)
 +  {
@@ -4180,13 +4618,15 @@ index 0000000..d79375d
 +  Reply Respond(Result result, const Backend& backend) const
 +  {
 +    Reply out{{'P', 'F', 'D', 'Q', 1, static_cast<std::uint8_t>(result), 0,
-+               static_cast<std::uint8_t>(backend.ForegroundMode()), 0, 0, 0, 0, 0, 0, 0, 15}};
++               static_cast<std::uint8_t>(backend.ForegroundMode()), 0, 0, 0, 0, 0, 0, 0, 31}};
 +    if (backend.HasTeams())
 +    {
 +      out[6] |= 1;
 +      // A peer can disconnect between queries; never publish failed AND ready.
 +      if (backend.TeamsFailed()) out[6] |= 4;
 +      else if (backend.TeamsReady()) out[6] |= 2;
++      else if (backend.TeamsWaiting()) out[6] |= 8;
++      else if (backend.TeamsSearching()) out[6] |= 16;
 +    }
 +    out[8] = static_cast<std::uint8_t>(m_generation >> 24);
 +    out[9] = static_cast<std::uint8_t>(m_generation >> 16);
@@ -4232,10 +4672,10 @@ index 0000000..4721eb4
 +};
 diff --git a/Source/Core/Core/Slippi/SlippiSessionBarrier.h b/Source/Core/Core/Slippi/SlippiSessionBarrier.h
 new file mode 100644
-index 0000000..60da1b0
+index 0000000..fdea27b
 --- /dev/null
 +++ b/Source/Core/Core/Slippi/SlippiSessionBarrier.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,28 @@
 +// Copyright 2026 Dolphin Emulator Project
 +// Licensed under GPLv2+
 +// Refer to the license.txt file included.
@@ -4253,6 +4693,7 @@ index 0000000..60da1b0
 +  void ReportFinished() { m_report = false; }
 +  void ReplayQueued() { m_submitted.fetch_add(1, std::memory_order_release); }
 +  void ReplayWritten() { m_completed.fetch_add(1, std::memory_order_release); }
++  bool GameplayActive() const { return m_gameplay; }
 +  bool OnlineIdle() const { return !m_gameplay && !m_report; }
 +  bool Idle() const
 +  {
@@ -4358,3 +4799,15 @@ index c8c0bd0..118c630 100644
  	uintptr_t slprs_exi_device_ptr;
 +	SlippiRustAccess m_rustAccess;
  };
+diff --git a/Source/Core/VideoCommon/OnScreenDisplay.h b/Source/Core/VideoCommon/OnScreenDisplay.h
+index 5bbae44..1df5cce 100644
+--- a/Source/Core/VideoCommon/OnScreenDisplay.h
++++ b/Source/Core/VideoCommon/OnScreenDisplay.h
+@@ -33,6 +33,7 @@ enum class MessageType
+ 	PerformanceWarning,
+ 	DesyncWarning,
+ 	PoorPerformanceTermination,
++	TeamsQueueStatus,
+ 
+ 	// This entry must be kept last so that persistent typed messages are
+ 	// displayed before other messages
